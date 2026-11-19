@@ -1,0 +1,47 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Backend npm test",
+			"type": "shell",
+			"command": "cd /d \"c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\backend\" && npm test",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Frontend npm install and build",
+			"type": "shell",
+			"command": "cd /d \"c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\frontend\" && npm install && npm run build",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Backend npm test fixed",
+			"type": "shell",
+			"command": "Set-Location 'c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\backend'; npm test",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Backend npm test npmcmd",
+			"type": "shell",
+			"command": "Set-Location 'c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\backend'; npm.cmd test",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Frontend npm install",
+			"type": "shell",
+			"command": "Set-Location 'c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\frontend'; npm.cmd install",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Frontend npm build",
+			"type": "shell",
+			"command": "Set-Location 'c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\frontend'; npm.cmd run build",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}
