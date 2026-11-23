@@ -5,7 +5,6 @@ AfterDistance is a real-time, private two-player romantic game platform.
 ## Requirements
 
 - Node.js 20 or newer
-- MongoDB optional for local setup; set `MONGODB_URI` for persistence
 - Two modern browsers or devices
 
 ## Setup
@@ -27,7 +26,9 @@ npm run dev
 
 Open `http://localhost:5173`. Create a room in one browser, copy the invitation link or code, and join from a second browser/device.
 
-Set `VITE_API_URL` in the frontend environment when the backend is not at `http://localhost:3001`.
+Set `VITE_API_URL` in the frontend environment when the backend is not at `http://localhost:3001`. This same URL is used for the HTTP API and Socket.IO connection.
+
+MongoDB stores room snapshots, guest sessions, game sessions and final results when `MONGODB_URI` is configured. It is optional for local development and mandatory in production. Valid room snapshots are recovered after backend restarts, subject to room expiry. See [DEPLOYMENT.md](./DEPLOYMENT.md) before hosting.
 
 ## Game flow
 

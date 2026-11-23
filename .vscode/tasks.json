@@ -42,6 +42,29 @@
 			"command": "Set-Location 'c:\\Users\\Steve254\\OneDrive\\Documents\\PERSONAL WOK\\LOVE GAMES\\frontend'; npm.cmd run build",
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "Temporary backend test command",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"--prefix",
+				"backend",
+				"test"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Temporary backend node tests",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--test",
+				"backend/test/game.test.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

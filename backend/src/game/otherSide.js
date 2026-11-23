@@ -75,4 +75,27 @@ function publicGame(game, sessionId) {
   };
 }
 
-module.exports = { scenarios, createGame, publicGame, publicRound };
+function revealRound(game) {
+  const entries = Object.values(game.playerStates);
+  if (entries.length !== 2) return null;
+  const [a, b] = entries;
+  const round = scenarios[game.currentRound];
+  const pointsA = Number(a.answer === b.prediction) + Number(b.answer === a.prediction);
+  const pointsB = Number(b.answer === a.prediction) + Number(a.answer === b.prediction);
+  game.scores[a.sessionId] = (game.scores[a.sessionId] || 0) + pointsA;
+  game.scores[b.sessionId] = (game.scores[b.sessionId] || 0) + pointsB;
+  const result = {
+    round: game.currentRound + 1,
+    answers: { [a.sessionId]: a.answer, [b.sessionId]: b.answer },
+    predictions: { [a.sessionId]: a.prediction, [b.sessionId]: b.prediction },
+    scores: { [a.sessionId]: pointsA, [b.sessionId]: pointsB },
+    explanation: round.category === 'Words left unsaid'
+      ? 'Opening the same door can reveal how closely you read one another.'
+      : 'You chose from the same moment, yet saw it through different hearts.'
+  };
+  game.roundResults.push(result);
+  game.currentPhase = 'ROUND_RESULTS';
+  return result;
+}
+
+module.exports = { scenarios, createGame, publicGame, publicRound, revealRound };

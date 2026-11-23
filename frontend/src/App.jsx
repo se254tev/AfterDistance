@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { BrowserRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import './App.css';
+import { getStoredSession, saveStoredSession } from './session.js';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
+  || (import.meta.env.PROD ? '' : 'http://localhost:3001');
 
 function Stars() {
   return <div className="stars" aria-hidden="true">{Array.from({ length: 18 }, (_, i) => <i key={i} />)}</div>;
@@ -36,7 +38,7 @@ function Entry({ mode }) {
       const response = await fetch(API + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not enter the room.');
-      sessionStorage.setItem('ad-session', JSON.stringify({ sessionId: data.sessionId, roomCode: data.roomCode, nickname }));
+      saveStoredSession({ sessionId: data.sessionId, roomCode: data.roomCode, nickname });
       navigate(`/room/${data.roomCode}`);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }
@@ -44,7 +46,7 @@ function Entry({ mode }) {
     <p className="eyebrow">{mode === 'create' ? 'BEGIN TOGETHER' : 'ENTER YOUR WORLD'}</p>
     <h2>{mode === 'create' ? 'Create a private room' : 'Join your partner'}</h2>
     <form onSubmit={submit}>
-      {mode === 'join' && <label>Invitation code<input value={code} onChange={e => setCode(e.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase())} placeholder="XXXXXX" required /></label>}
+      {mode === 'join' && <label>Invitation code<input value={code} onChange={e => setCode(e.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 12).toUpperCase())} placeholder="XXXXXXXXXXXX" maxLength={12} required /></label>}
       <label>Your nickname<input value={nickname} onChange={e => setNickname(e.target.value)} placeholder="How should your partner know you?" minLength={2} maxLength={24} required /></label>
       {error && <p className="error">{error}</p>}
       <button className="button primary" disabled={loading}>{loading ? 'Opening...' : mode === 'create' ? 'Create my room' : 'Join room'} <span>→</span></button>
@@ -58,7 +60,7 @@ function RoomPage() {
   const [status, setStatus] = useState('Connecting...');
   const [answer, setAnswer] = useState('');
   const [prediction, setPrediction] = useState('');
-  const stored = JSON.parse(sessionStorage.getItem('ad-session') || '{}');
+  const stored = getStoredSession();
   useEffect(() => {
     if (!stored.sessionId || !stored.roomCode) return;
     const socket = io(API, { transports: ['websocket', 'polling'], reconnection: true, reconnectionDelay: 300, timeout: 5000 });
