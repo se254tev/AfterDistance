@@ -29,6 +29,7 @@ if (isProduction) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({ origin: clientOrigins }));
 app.use(express.json({ limit: '32kb' }));
