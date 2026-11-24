@@ -33,11 +33,13 @@ MongoDB stores room snapshots, guest sessions, game sessions and final results w
 ## Game flow
 
 1. Both players join and mark themselves ready.
-2. Either player starts **The Other Side of Us**.
+2. Both players use the shared room setup to select **The Other Side of Us** or the Kenyan Comedy Experience. The Kenyan experience offers comedy, romance, savage (playful), and mind-reader modes; seven content categories; six Kenyan content packs; English, Kiswahili, Sheng, or Mixed Kenyan Language; and optional 10-, 15-, or 20-second answer timers. Mixed Kenyan Language is its default.
 3. Both submit private answers.
 4. Both submit private predictions.
 5. The server reveals both choices and server-calculated points together.
-6. Each player continues; after five rounds the final scores are shown.
+6. Each player continues; after five rounds the final scores and earned achievements are shown.
+
+The server selects and persists one five-question set for each game, so both players and reconnecting players see the same questions. Replays use previously unused questions where the selected pool has them. Kenyan games may include a surprise round. Timers, answer validation, quiz scoring, achievements, and round progression are server-authoritative; a timed-out answer or prediction is treated as unanswered. Answers and predictions are omitted from player views until the reveal. Content lives in `backend/src/game/content.js`; invalid mode/category/content-pack combinations are excluded from the room setup.
 
 ## Verification
 

@@ -29,6 +29,7 @@ The backend remains server-authoritative. MongoDB stores durable snapshots and r
 | `frontend/*` | Netlify |
 | `backend/src/server.js` | Render |
 | `backend/src/game/otherSide.js` | Render |
+| `backend/src/game/content.js` | Render |
 | `backend/src/persistence.js` | Render |
 | `backend/src/models.js` | Deployed with backend; used by MongoDB/Mongoose |
 | `backend/test/*` | GitHub CI/local validation |
@@ -83,10 +84,10 @@ Atlas stores:
 
 - `GuestSession`: nickname, room membership and last-seen time
 - `GameRoom`: room metadata, players, expiry and the complete live room snapshot
-- `GameSession`: phase, round, player states, scores and round results
+- `GameSession`: selected game configuration and questions, used-question IDs, phase deadline, player states, scores and round results
 - `GameResult`: final players, round results and final scores
 
-Private answers and predictions are persisted in MongoDB as server-authoritative game state. They must never be sent to a browser except in reveal results after both predictions complete.
+Private answers and predictions are persisted in MongoDB as server-authoritative game state. They must never be sent to a browser except in reveal results after both predictions complete. Timer deadlines are absolute server timestamps, so reconnecting players share the current phase and countdown; a restarted server restores the deadline from the room snapshot.
 
 ## 6. Render
 
