@@ -35,14 +35,14 @@ test('private answers and predictions are absent from public views', () => {
   const game = createGame('ABCDEF');
   game.currentPhase = 'PREDICTING';
   game.playerStates = {
-    a: { seat: 0, answerSubmitted: true, predictionSubmitted: false, answer: 'Hold', prediction: null },
-    b: { seat: 1, answerSubmitted: true, predictionSubmitted: false, answer: 'Ride', prediction: null }
+    a: { sessionId: 'a', seat: 0, answerSubmitted: true, predictionSubmitted: false, answer: 'private-choice-a', prediction: null },
+    b: { sessionId: 'b', seat: 1, answerSubmitted: true, predictionSubmitted: false, answer: 'private-choice-b', prediction: null }
   };
   const view = publicGame(game, 'a');
   assert.equal(view.submittedAnswer, true);
   assert.equal(view.submittedPrediction, false);
-  assert.equal(JSON.stringify(view).includes('Hold'), false);
-  assert.equal(JSON.stringify(view).includes('Ride'), false);
+  assert.equal(JSON.stringify(view).includes('private-choice-a'), false);
+  assert.equal(JSON.stringify(view).includes('private-choice-b'), false);
 });
 
 test('revealing scores and transitions are server-derived', () => {
@@ -58,6 +58,35 @@ test('revealing scores and transitions are server-derived', () => {
   assert.equal(result.round, 1);
   assert.equal(game.scores.a, 2);
   assert.equal(game.scores.b, 2);
+});
+
+test('reveal calculates points for asymmetric predictions', () => {
+  const game = createGame('ABCDEF');
+  game.currentPhase = 'PREDICTING';
+  game.playerStates = {
+    a: { sessionId: 'a', seat: 0, answerSubmitted: true, predictionSubmitted: true, answer: scenarios[0].choices[0], prediction: scenarios[0].choices[2] },
+    b: { sessionId: 'b', seat: 1, answerSubmitted: true, predictionSubmitted: true, answer: scenarios[0].choices[1], prediction: scenarios[0].choices[3] }
+  };
+  game.scores = { a: 0, b: 0 };
+  revealRound(game);
+  assert.equal(game.scores.a, 0);
+  assert.equal(game.scores.b, 0);
+});
+
+test('public game projection hides session ids and private selections', () => {
+  const game = createGame('ABCDEF');
+  game.currentPhase = 'PREDICTING';
+  game.playerStates = {
+    a: { sessionId: 'a', seat: 0, answerSubmitted: true, predictionSubmitted: false, answer: 'secret-a', prediction: null },
+    b: { sessionId: 'b', seat: 1, answerSubmitted: true, predictionSubmitted: false, answer: 'secret-b', prediction: null }
+  };
+  game.scores = { a: 1, b: 2 };
+  const view = publicGame(game, 'a');
+  const serialized = JSON.stringify(view);
+  assert.equal(serialized.includes('secret-a'), false);
+  assert.equal(serialized.includes('secret-b'), false);
+  assert.equal(view.scores.you, 1);
+  assert.equal(view.scores.partner, 2);
 });
 
 test('socket room and answer payloads reject malformed input', () => {

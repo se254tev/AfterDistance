@@ -13,7 +13,9 @@ const socketValidation = require('./socket-validation');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-const defaultClientOrigin = isProduction ? '' : 'http://localhost:5173';
+const defaultClientOrigin = isProduction
+  ? 'https://afterdistance.netlify.app'
+  : 'http://localhost:5173';
 const clientOrigins = (process.env.CLIENT_ORIGIN || defaultClientOrigin)
   .split(',')
   .map(origin => origin.trim())
@@ -50,6 +52,7 @@ const rooms = new Map();
 const sessions = new Map();
 const socketToSession = new Map();
 const sessionToSockets = new Map();
+const persistenceQueues = new Map();
 
 function code() {
   let value;
@@ -72,13 +75,15 @@ function createToken() { return randomUUID() + '.' + randomBytes(24).toString('b
 function publicRoom(room) {
   return {
     roomCode: room.code, status: room.status, expiresAt: room.expiresAt,
-    players: room.players.map(p => ({ sessionId: p.sessionId, nickname: p.nickname, ready: p.ready, online: p.online }))
+    players: room.players.map(p => ({ nickname: p.nickname, ready: p.ready, online: p.online }))
   };
 }
 function roomView(room, sessionId) {
   const view = publicRoom(room);
   view.me = room.players.find(p => p.sessionId === sessionId) || null;
-  view.partner = room.players.find(p => p.sessionId !== sessionId) || null;
+  if (view.me) view.me = { nickname: view.me.nickname, ready: view.me.ready, online: view.me.online, sessionId };
+  const partner = room.players.find(p => p.sessionId !== sessionId) || null;
+  view.partner = partner ? { nickname: partner.nickname, ready: partner.ready, online: partner.online } : null;
   view.game = room.game ? publicGame(room.game, sessionId) : null;
   return view;
 }
@@ -90,15 +95,24 @@ function broadcastRoom(room) {
 }
 
 function persistRoom(room) {
-  persistence.saveRoom(room).catch(error => {
-    console.error(`Failed to persist room ${room.code}: ${error.message}`);
-    if (isProduction) process.exit(1);
-  });
+  const previous = persistenceQueues.get(room.code) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(() => persistence.saveRoom(room))
+    .catch(error => {
+      console.error(`Failed to persist room ${room.code}: ${error.message}`);
+      if (isProduction) throw error;
+    });
+  persistenceQueues.set(room.code, current);
+  current.finally(() => {
+    if (persistenceQueues.get(room.code) === current) persistenceQueues.delete(room.code);
+  }).catch(() => {});
+  return current;
 }
 function persistGuest(sessionId, nickname, roomCode) {
-  persistence.saveGuestSession(sessionId, nickname, roomCode).catch(error => {
+  return persistence.saveGuestSession(sessionId, nickname, roomCode).catch(error => {
     console.error(`Failed to persist guest session ${sessionId}: ${error.message}`);
-    if (isProduction) process.exit(1);
+    if (isProduction) throw error;
   });
 }
 function findActiveRoom(roomCode) {
@@ -140,7 +154,7 @@ app.get('/api/health', (_, res) => res.json({
   ok: true,
   persistence: isProduction ? (persistence.isConnected() ? 'connected' : 'disconnected') : 'optional'
 }));
-app.post('/api/rooms', (req, res) => {
+app.post('/api/rooms', async (req, res) => {
   const parsed = z.object({ nickname: z.string().trim().min(2).max(24) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter a nickname from 2 to 24 characters.' });
   const roomCode = code();
@@ -152,11 +166,22 @@ app.post('/api/rooms', (req, res) => {
     game: null
   };
   rooms.set(roomCode, room); sessions.set(sessionId, { roomCode, nickname: parsed.data.nickname });
-  persistGuest(sessionId, parsed.data.nickname, roomCode);
-  persistRoom(room);
+  try {
+    if (isProduction) {
+      await persistGuest(sessionId, parsed.data.nickname, roomCode);
+      await persistRoom(room);
+    } else {
+      persistGuest(sessionId, parsed.data.nickname, roomCode);
+      persistRoom(room);
+    }
+  } catch (error) {
+    rooms.delete(roomCode);
+    sessions.delete(sessionId);
+    return res.status(503).json({ error: 'The room could not be saved. Please try again.' });
+  }
   res.status(201).json({ roomCode, sessionId, room: roomView(room, sessionId), inviteUrl: `/join/${roomCode}` });
 });
-app.post('/api/rooms/join', roomJoinLimit, (req, res) => {
+app.post('/api/rooms/join', roomJoinLimit, async (req, res) => {
   const parsed = z.object({ nickname: z.string().trim().min(2).max(24), roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Valid nickname and 12-character room code are required.' });
   const roomCode = parsed.data.roomCode.toUpperCase();
@@ -167,8 +192,20 @@ app.post('/api/rooms/join', roomJoinLimit, (req, res) => {
   room.players.push({ sessionId, nickname: parsed.data.nickname, ready: false, online: true });
   room.status = 'WAITING_FOR_READY';
   sessions.set(sessionId, { roomCode, nickname: parsed.data.nickname });
-  persistGuest(sessionId, parsed.data.nickname, roomCode);
-  persistRoom(room);
+  try {
+    if (isProduction) {
+      await persistGuest(sessionId, parsed.data.nickname, roomCode);
+      await persistRoom(room);
+    } else {
+      persistGuest(sessionId, parsed.data.nickname, roomCode);
+      persistRoom(room);
+    }
+  } catch (error) {
+    room.players.pop();
+    room.status = 'WAITING_FOR_PLAYER';
+    sessions.delete(sessionId);
+    return res.status(503).json({ error: 'The room could not be saved. Please try again.' });
+  }
   broadcastRoom(room);
   res.status(200).json({ roomCode, sessionId, room: roomView(room, sessionId), inviteUrl: `/join/${roomCode}` });
 });
@@ -212,6 +249,7 @@ io.on('connection', socket => {
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid game start request');
       const { room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      if (room.game) throw new Error('The game has already started');
       if (room.players.length !== 2 || !room.players.every(p => p.ready && p.online)) throw new Error('Both players must be ready and online');
       room.game = createGame(room.code);
       room.game.currentPhase = 'ANSWERING';
@@ -238,7 +276,7 @@ io.on('connection', socket => {
       if (!round.choices.includes(parsed.data.answer)) throw new Error('Invalid answer');
       if (player.answerSubmitted) throw new Error('Answer already submitted');
       player.answer = parsed.data.answer; player.answerSubmitted = true;
-      io.to(room.code).emit('game:answer-received', { sessionId: parsed.data.sessionId, timestamp: Date.now() });
+      io.to(room.code).emit('game:answer-received', { timestamp: Date.now() });
       if (Object.values(game.playerStates).every(p => p.answerSubmitted)) game.currentPhase = 'PREDICTING';
       broadcastRoom(room);
       persistRoom(room);
@@ -305,6 +343,7 @@ io.on('connection', socket => {
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid replay request');
       const { room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      if (!room.game || room.game.currentPhase !== 'COMPLETED') throw new Error('Replay is available after the game completes');
       room.game = createGame(room.code);
       room.status = 'PLAYING';
       room.game.currentPhase = 'ANSWERING';
@@ -335,7 +374,7 @@ io.on('connection', socket => {
       const parsed = typingPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid typing status');
       const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
-      socket.to(room.code).emit('player:typing', { sessionId: member.sessionId, typing: parsed.data.typing });
+      socket.to(room.code).emit('player:typing', { typing: parsed.data.typing });
     } catch (error) { socket.emit('error:occurred', { error: error.message }); }
   });
   socket.on('room:leave', (payload, callback) => {
@@ -356,6 +395,7 @@ io.on('connection', socket => {
     socketToSession.delete(socket.id);
     if (sessionToSockets.get(sessionId) === socket.id) sessionToSockets.delete(sessionId);
     if (!sessionId) return;
+    if (sessionToSockets.has(sessionId)) return;
     for (const room of rooms.values()) {
       const member = room.players.find(p => p.sessionId === sessionId);
       if (member) {

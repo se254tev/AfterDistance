@@ -59,18 +59,37 @@ function publicRound(game) {
 }
 
 function publicGame(game, sessionId) {
+  const ownState = game.playerStates[sessionId];
+  const partnerState = Object.values(game.playerStates).find(state => state.sessionId !== sessionId);
+  const latestResult = game.currentPhase === 'ROUND_RESULTS'
+    ? game.roundResults.at(-1)
+    : null;
+  const roundResults = latestResult && ownState && partnerState ? {
+    round: latestResult.round,
+    yourAnswer: latestResult.answers[sessionId],
+    partnerAnswer: latestResult.answers[partnerState.sessionId],
+    yourPrediction: latestResult.predictions[sessionId],
+    partnerPrediction: latestResult.predictions[partnerState.sessionId],
+    yourRoundPoints: latestResult.scores[sessionId],
+    partnerRoundPoints: latestResult.scores[partnerState.sessionId],
+    explanation: latestResult.explanation
+  } : null;
+
   return {
     gameType: game.gameType,
     currentRound: game.currentRound + 1,
     totalRounds: scenarios.length,
     currentPhase: game.currentPhase,
     round: publicRound(game),
-    privateInfo: game.currentRound < scenarios.length ? scenarios[game.currentRound].playerInfo[game.playerStates[sessionId]?.seat || 0] : null,
-    submittedAnswer: Boolean(game.playerStates[sessionId]?.answerSubmitted),
-    submittedPrediction: Boolean(game.playerStates[sessionId]?.predictionSubmitted),
+    privateInfo: game.currentRound < scenarios.length ? scenarios[game.currentRound].playerInfo[ownState?.seat || 0] : null,
+    submittedAnswer: Boolean(ownState?.answerSubmitted),
+    submittedPrediction: Boolean(ownState?.predictionSubmitted),
     readyForNext: Boolean(game.readyForNext[sessionId]),
-    scores: game.scores,
-    roundResults: game.currentPhase === 'ROUND_RESULTS' ? game.roundResults.at(-1) : null,
+    scores: ownState && partnerState ? {
+      you: game.scores[sessionId] || 0,
+      partner: game.scores[partnerState.sessionId] || 0
+    } : null,
+    roundResults,
     completedAt: game.completedAt
   };
 }

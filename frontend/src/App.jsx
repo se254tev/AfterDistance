@@ -60,9 +60,10 @@ function RoomPage() {
   const [status, setStatus] = useState('Connecting...');
   const [answer, setAnswer] = useState('');
   const [prediction, setPrediction] = useState('');
+  const [socketError, setSocketError] = useState('');
   const stored = getStoredSession();
   useEffect(() => {
-    if (!stored.sessionId || !stored.roomCode) return;
+    if (!stored.sessionId || !stored.roomCode || stored.roomCode !== code) return;
     const socket = io(API, { transports: ['websocket', 'polling'], reconnection: true, reconnectionDelay: 300, timeout: 5000 });
     socket.on('connect', () => {
       setStatus('Connected');
@@ -73,6 +74,7 @@ function RoomPage() {
     socket.on('player:offline', () => setStatus('Partner offline'));
     socket.on('player:online', () => setStatus('Partner is online'));
     socket.on('connection:restored', () => setStatus('Connection restored'));
+    socket.on('error:occurred', payload => setSocketError(payload?.error || 'A connection error occurred.'));
     window.adSocket = socket;
     return () => { socket.disconnect(); delete window.adSocket; };
   }, [code]);
@@ -82,7 +84,15 @@ function RoomPage() {
   const me = room.me;
   const partner = room.partner;
   const game = room.game;
-  function emit(event, payload) { window.adSocket?.emit(event, { roomCode: stored.roomCode, sessionId: stored.sessionId, ...payload }); }
+  function emit(event, payload) {
+    window.adSocket?.emit(
+      event,
+      { roomCode: stored.roomCode, sessionId: stored.sessionId, ...payload },
+      result => {
+        if (result && result.ok === false) setSocketError(result.error || 'The request could not be completed.');
+      }
+    );
+  }
   function ready() { emit('player:ready', { ready: !me.ready }); }
 
   return <Shell><section className="room-layout">
@@ -92,6 +102,7 @@ function RoomPage() {
         <div className="waiting-card"><div className="pulse" /><span>Waiting for your partner</span><button className="copy" onClick={() => navigator.clipboard?.writeText(`${location.origin}/join/${stored.roomCode}`)}>Copy invitation link</button></div>}
     </aside>
     <div className="game-panel"><div className="connection"><i /> {status}</div>
+      {socketError && <p className="error" role="alert">{socketError}</p>}
       {!game ? <>
         <p className="eyebrow">CHOOSE YOUR FIRST MEMORY</p><h2>Ready when you both are.</h2>
         <button className="game-card" onClick={() => emit('game:start', {})}><span className="game-icon">✦</span><div><b>The Other Side of Us</b><small>Five rounds · Understand one another</small></div><span>→</span></button>
@@ -120,11 +131,15 @@ function Results({ game, emit, me }) {
   const result = game.roundResults;
   if (!result) return <Waiting partnerText="Preparing your reveal..." />;
   return <div className="results"><p className="eyebrow">REVEAL · ROUND {result.round}</p><h2>Here is what you both chose.</h2>
-    {Object.entries(result.answers).map(([id, choice]) => <div className="reveal-row" key={id}><b>{choice}</b><small>{id === me.sessionId ? 'Your choice' : 'Partner’s choice'}</small></div>)}
+    <div className="reveal-row"><b>{result.yourAnswer}</b><small>Your choice</small></div>
+    <div className="reveal-row"><b>{result.partnerAnswer}</b><small>Partner’s choice</small></div>
     <p className="explanation">{result.explanation}</p><button className="button primary" onClick={() => emit('game:next-round', {})}>{game.readyForNext ? 'Waiting for partner...' : 'Continue'}</button></div>;
 }
 function Completed({ game, emit }) {
-  const entries = Object.entries(game.scores || {});
+  const entries = [
+    ['You', game.scores?.you || 0],
+    ['Partner', game.scores?.partner || 0]
+  ];
   return <div className="results"><p className="eyebrow">YOUR SHARED STORY</p><h2>Game completed</h2><div className="score">{entries.map(([id, score]) => <div key={id}><b>{score}</b><small>Connection points</small></div>)}</div><button className="button primary" onClick={() => emit('game:replay', {})}>Play again</button></div>;
 }
 
