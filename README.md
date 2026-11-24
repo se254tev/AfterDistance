@@ -24,7 +24,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Create a room in one browser, copy the invitation link or code, and join from a second browser/device.
+Open `http://localhost:5173`. Create a room, then invite the second player via WhatsApp, by copying the invitation link, or by sharing the room code. The recipient can open `/join/<room-code>` or select **Join a room** and enter the code.
 
 Set `VITE_API_URL` in the frontend environment when the backend is not at `http://localhost:3001`. This same URL is used for the HTTP API and Socket.IO connection.
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { BrowserRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import './App.css';
+import { copyInvitationText, getInvitationLink, getWhatsAppShareUrl } from './invitations.js';
 import { getStoredSession, saveStoredSession } from './session.js';
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
@@ -61,6 +62,7 @@ function RoomPage() {
   const [answer, setAnswer] = useState('');
   const [prediction, setPrediction] = useState('');
   const [socketError, setSocketError] = useState('');
+  const [invitationFeedback, setInvitationFeedback] = useState('');
   const stored = getStoredSession();
   useEffect(() => {
     if (!stored.sessionId || !stored.roomCode || stored.roomCode !== code) return;
@@ -94,12 +96,26 @@ function RoomPage() {
     );
   }
   function ready() { emit('player:ready', { ready: !me.ready }); }
+  async function copyInvitation(value, successMessage) {
+    try {
+      await copyInvitationText(value);
+      setInvitationFeedback(successMessage);
+    } catch {
+      setInvitationFeedback('Could not copy. Please copy it manually.');
+    }
+  }
 
   return <Shell><section className="room-layout">
-    <aside><p className="eyebrow">SHARED ROOM</p><h3>{stored.roomCode}</h3>
+    <aside><p className="eyebrow">SHARED ROOM</p><div className="room-code"><h3>{stored.roomCode}</h3><button className="copy" onClick={() => copyInvitation(stored.roomCode, 'Room code copied.')}>Copy Room Code</button></div>
       <div className="player-card"><span className="avatar">{me?.nickname?.[0]}</span><div><b>{me?.nickname}</b><small>{me?.online ? 'You · Online' : 'Offline'}</small></div></div>
       {partner ? <div className="player-card"><span className="avatar partner-avatar">{partner.nickname[0]}</span><div><b>{partner.nickname}</b><small>{partner.online ? 'Partner · Online' : 'Offline'}</small></div></div> :
-        <div className="waiting-card"><div className="pulse" /><span>Waiting for your partner</span><button className="copy" onClick={() => navigator.clipboard?.writeText(`${location.origin}/join/${stored.roomCode}`)}>Copy invitation link</button></div>}
+        <div className="waiting-card"><div className="pulse" /><span>Waiting for your partner</span>
+          <div className="invitation-actions">
+            <a className="button ghost" href={getWhatsAppShareUrl(stored.roomCode)} target="_blank" rel="noopener noreferrer">Invite via WhatsApp</a>
+            <button className="button ghost" onClick={() => copyInvitation(getInvitationLink(stored.roomCode), 'Invitation link copied.')}>Copy Invitation Link</button>
+          </div>
+        </div>}
+      {invitationFeedback && <p className="invitation-feedback" role="status" aria-live="polite">{invitationFeedback}</p>}
     </aside>
     <div className="game-panel"><div className="connection"><i /> {status}</div>
       {socketError && <p className="error" role="alert">{socketError}</p>}
