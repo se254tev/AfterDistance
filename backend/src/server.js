@@ -21,6 +21,7 @@ const {
 const persistence = require('./persistence');
 const socketValidation = require('./socket-validation');
 const { findSessionMember } = require('./session-recovery');
+const privacyActions = require('./privacy-actions');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -48,6 +49,7 @@ app.use(cors({ origin: clientOrigins }));
 app.use(express.json({ limit: '32kb' }));
 app.use('/api/', rateLimit({ windowMs: 60_000, limit: 120 }));
 const roomJoinLimit = rateLimit({ windowMs: 15 * 60_000, limit: 30 });
+const privacyActionLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10 });
 const roomCleanup = setInterval(() => {
   for (const roomCode of rooms.keys()) findActiveRoom(roomCode);
 }, 60_000);
@@ -61,15 +63,21 @@ const io = new Server(server, {
 
 const rooms = new Map();
 const sessions = new Map();
+const deletingSessions = new Set();
+const deletedSessionHashes = new Set();
+const deletingRooms = new Set();
+const deletedRooms = new Set();
+const deletedRoomOwnerHashes = new Map();
 const socketToSession = new Map();
 const sessionToSockets = new Map();
 const persistenceQueues = new Map();
+const gameResultWrites = new Map();
 const gameTimers = new Map();
 const gameOptions = getOptions();
 
 function code() {
   let value;
-  do value = randomBytes(6).toString('hex').toUpperCase(); while (rooms.has(value));
+  do value = randomBytes(6).toString('hex').toUpperCase(); while (rooms.has(value) || deletedRooms.has(value));
   return value;
 }
 
@@ -101,6 +109,7 @@ function roomView(room, sessionId) {
   const partner = room.players.find(p => p.sessionId !== sessionId) || null;
   view.partner = partner ? { nickname: partner.nickname, ready: partner.ready, online: partner.online } : null;
   view.game = room.game ? publicGame(room.game, sessionId) : null;
+  view.canDelete = privacyActions.canDeleteRoom(room, sessionId);
   return view;
 }
 function publicScores(room) {
@@ -116,13 +125,34 @@ function broadcastRoom(room) {
   }
 }
 
-function persistRoom(room) {
+function persistRoom(room, allowBlockedRoom = false) {
+  if ((!allowBlockedRoom && deletingRooms.has(room.code))
+      || room.players.some(player => deletingSessions.has(player.sessionId)
+        || deletedSessionHashes.has(persistence.hashSessionId(player.sessionId)))) {
+    return Promise.resolve();
+  }
+  function persistGameResult(room) {
+    if (deletingRooms.has(room.code)
+        || room.players.some(player => deletingSessions.has(player.sessionId)
+          || deletedSessionHashes.has(persistence.hashSessionId(player.sessionId)))) {
+      return Promise.resolve();
+    }
+    const write = persistence.saveGameResult(room).catch(error => {
+      console.error(`Failed to persist game result: ${error.name || 'database error'}`);
+      if (isProduction) throw error;
+    });
+    gameResultWrites.set(room.code, write);
+    write.finally(() => {
+      if (gameResultWrites.get(room.code) === write) gameResultWrites.delete(room.code);
+    }).catch(() => {});
+    return write;
+  }
   const previous = persistenceQueues.get(room.code) || Promise.resolve();
   const current = previous
     .catch(() => {})
     .then(() => persistence.saveRoom(room))
     .catch(error => {
-      console.error(`Failed to persist room ${room.code}: ${error.message}`);
+      console.error(`Failed to persist room ${room.code}: ${error.name || 'database error'}`);
       if (isProduction) throw error;
     });
   persistenceQueues.set(room.code, current);
@@ -133,11 +163,12 @@ function persistRoom(room) {
 }
 function persistGuest(sessionId, nickname, roomCode) {
   return persistence.saveGuestSession(sessionId, nickname, roomCode).catch(error => {
-    console.error(`Failed to persist guest session ${sessionId}: ${error.message}`);
+    console.error(`Failed to persist guest session: ${error.name || 'database error'}`);
     if (isProduction) throw error;
   });
 }
 function findActiveRoom(roomCode) {
+  if (deletedRooms.has(roomCode) || deletingRooms.has(roomCode)) return null;
   const room = rooms.get(roomCode);
   if (!room) return null;
   if (new Date(room.expiresAt).getTime() <= Date.now()) {
@@ -155,6 +186,7 @@ function ack(socket, callback, ok, payload) {
   if (typeof callback === 'function') callback(ok ? { ok: true, ...payload } : { ok: false, error: payload?.error || 'Operation failed' });
 }
 function validateSocket(socket, token, codeValue) {
+  if (isSessionInvalidated(token)) throw new Error('Invalid session');
   const room = findActiveRoom(codeValue);
   if (!room) throw new Error('Room not found');
   const member = findSessionMember(room, sessions, token);
@@ -163,6 +195,46 @@ function validateSocket(socket, token, codeValue) {
     throw new Error('Invalid session');
   }
   return { room, member };
+}
+function isSessionInvalidated(sessionId) {
+  return deletingSessions.has(sessionId)
+    || deletedSessionHashes.has(persistence.hashSessionId(sessionId));
+}
+function disconnectSession(sessionId, eventName, payload) {
+  const socketId = sessionToSockets.get(sessionId);
+  const socket = socketId ? io.sockets.sockets.get(socketId) : null;
+  if (socket && eventName) socket.emit(eventName, payload);
+  if (socketId) {
+    socketToSession.delete(socketId);
+    sessionToSockets.delete(sessionId);
+    socket?.disconnect(true);
+  }
+}
+function authenticateRequest(req, roomCode) {
+  const parsed = z.object({
+    sessionId: z.string().min(32).max(128),
+    roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i)
+  }).safeParse(req.body);
+  if (!parsed.success) return { error: 'Valid room credentials are required.', status: 400 };
+  const sessionId = parsed.data.sessionId;
+  const normalizedCode = parsed.data.roomCode.toUpperCase();
+  if (roomCode && normalizedCode !== roomCode) return { error: 'Invalid room credentials.', status: 400 };
+  const room = findActiveRoom(normalizedCode);
+  const member = findSessionMember(room, sessions, sessionId);
+  if (!member || isSessionInvalidated(sessionId)) {
+    return { error: 'This saved session is invalid for the room.', status: 401 };
+  }
+  return { sessionId, room, member };
+}
+async function waitForRoomWrites(roomCode) {
+  const writes = [persistenceQueues.get(roomCode), gameResultWrites.get(roomCode)].filter(Boolean);
+  for (const queued of writes) {
+    try {
+      await queued;
+    } catch {
+      // The deletion pass removes any snapshot left by a failed queued write.
+    }
+  }
 }
 function resetRound(game) {
   game.readyForNext = {};
@@ -304,12 +376,38 @@ app.post('/api/rooms/join', roomJoinLimit, async (req, res) => {
   res.status(200).json({ roomCode, sessionId, room: roomView(room, sessionId), inviteUrl: `/join/${roomCode}` });
 });
 
-app.post('/api/sessions/resume', (req, res) => {
+app.post('/api/sessions/resume', async (req, res) => {
   const parsed = z.object({
     roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i),
     sessionId: z.string().min(32).max(128)
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Valid room credentials are required.' });
+  const roomCode = parsed.data.roomCode.toUpperCase();
+  let deletionRecord;
+  try {
+    deletionRecord = await persistence.getDeletionRecord(parsed.data.sessionId);
+  } catch (error) {
+    console.error(`Failed to verify saved session status: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'Your saved session could not be verified.' });
+  }
+  if (deletingSessions.has(parsed.data.sessionId) || deletionRecord?.status === 'pending') {
+    return res.status(423).json({ error: 'Deletion is pending. Open Privacy & Data Management to retry.' });
+  }
+  if (deletingRooms.has(roomCode)) {
+    let roomDeletion;
+    try {
+      roomDeletion = await persistence.getRoomDeletion(roomCode);
+    } catch (error) {
+      console.error(`Failed to verify room request status: ${error.name || 'database error'}`);
+      return res.status(503).json({ error: 'The room request status could not be verified.' });
+    }
+    return res.status(423).json({
+      error: roomDeletion?.status === 'pending'
+        ? 'Shared-game deletion is pending; the creator can retry in Privacy & Data Management.'
+        : 'A personal data request is processing for this room. Please retry shortly.'
+    });
+  }
+  if (isSessionInvalidated(parsed.data.sessionId)) return res.status(401).json({ error: 'This saved session has been deleted.' });
   const room = findActiveRoom(parsed.data.roomCode.toUpperCase());
   if (!room) return res.status(404).json({ error: 'This room is no longer available.' });
   const member = findSessionMember(room, sessions, parsed.data.sessionId);
@@ -317,13 +415,188 @@ app.post('/api/sessions/resume', (req, res) => {
   return res.json({ room: roomView(room, member.sessionId) });
 });
 
+app.post('/api/rooms/leave', privacyActionLimit, async (req, res) => {
+  const auth = authenticateRequest(req);
+  if (auth.error) return res.status(auth.status).json({ error: auth.error });
+  const { room, member, sessionId } = auth;
+  member.online = false;
+  io.to(room.code).emit('player:left', { nickname: member.nickname });
+  disconnectSession(sessionId);
+  broadcastRoom(room);
+  try {
+    await persistRoom(room);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error(`Failed to persist room leave: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'Could not save your departure. Please try again.' });
+  }
+});
+
+app.post('/api/rooms/delete', privacyActionLimit, async (req, res) => {
+  const parsed = z.object({
+    sessionId: z.string().min(32).max(128),
+    roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Valid room credentials are required.' });
+  const sessionId = parsed.data.sessionId;
+  const roomCode = parsed.data.roomCode.toUpperCase();
+  const ownerHash = persistence.hashSessionId(sessionId);
+  if (deletedRooms.has(roomCode)) {
+    return deletedRoomOwnerHashes.get(roomCode) === ownerHash
+      ? res.json({ ok: true, alreadyDeleted: true })
+      : res.status(403).json({ error: 'Only the room creator can delete this shared game.' });
+  }
+  let roomDeletion;
+  try {
+    roomDeletion = await persistence.getRoomDeletion(roomCode);
+  } catch (error) {
+    console.error(`Failed to verify shared game deletion status: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'The game deletion status could not be verified.' });
+  }
+  if (roomDeletion?.ownerHash === ownerHash && roomDeletion.status === 'completed') {
+    return res.json({ ok: true, alreadyDeleted: true });
+  }
+  if (roomDeletion && roomDeletion.ownerHash !== ownerHash) {
+    return res.status(403).json({ error: 'Only the room creator can delete this shared game.' });
+  }
+  if (deletingRooms.has(roomCode) && roomDeletion?.status !== 'pending') {
+    return res.status(423).json({ error: 'A personal data request is processing for this room. Please retry shortly.' });
+  }
+  const room = rooms.get(roomCode);
+  const member = findSessionMember(room, sessions, sessionId);
+  if (!member || isSessionInvalidated(sessionId)) {
+    return res.status(401).json({ error: 'This saved session is invalid for the room.' });
+  }
+  if (!privacyActions.canDeleteRoom(room, sessionId)) {
+    return res.status(403).json({ error: 'Only the room creator can delete this shared game.' });
+  }
+  deletingRooms.add(room.code);
+  await waitForRoomWrites(room.code);
+  try {
+    await persistence.deleteSharedRoom(room.code, sessionId);
+  } catch (error) {
+    console.error(`Failed to delete shared game: ${error.name || 'database error'}`);
+    try {
+      if (!await persistence.getRoomDeletion(room.code)) deletingRooms.delete(room.code);
+    } catch (statusError) {
+      console.error(`Failed to verify shared game deletion progress: ${statusError.name || 'database error'}`);
+    }
+    return res.status(503).json({ error: 'The game could not be fully deleted. Please retry.' });
+  }
+  io.to(room.code).emit('room:deleted');
+  clearGameTimer(room.code);
+  room.players.forEach(player => {
+    disconnectSession(player.sessionId);
+    sessions.delete(player.sessionId);
+  });
+  rooms.delete(room.code);
+  deletingRooms.delete(room.code);
+  deletedRooms.add(room.code);
+  deletedRoomOwnerHashes.set(room.code, ownerHash);
+  return res.json({ ok: true });
+});
+
+async function deleteAuthenticatedPlayerData(req, res) {
+  const parsed = z.object({
+    sessionId: z.string().min(32).max(128),
+    roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Valid room credentials are required.' });
+  const { sessionId } = parsed.data;
+  const sessionHash = persistence.hashSessionId(sessionId);
+  if (deletedSessionHashes.has(sessionHash)) {
+    return res.json({ ok: true, alreadyDeleted: true });
+  }
+  let deletionRecord;
+  try {
+    deletionRecord = await persistence.getDeletionRecord(sessionId);
+  } catch (error) {
+    console.error(`Failed to verify deletion status: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'Your data status could not be verified. Please retry.' });
+  }
+  const roomCode = parsed.data.roomCode.toUpperCase();
+  let roomDeletion;
+  try {
+    roomDeletion = await persistence.getRoomDeletion(roomCode);
+  } catch (error) {
+    console.error(`Failed to verify shared game status: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'The shared game status could not be verified.' });
+  }
+  if (roomDeletion?.status === 'pending') {
+    return res.status(423).json({ error: 'Shared-game deletion is pending. Start a new room after it completes.' });
+  }
+  if (deletingRooms.has(roomCode) && !deletingSessions.has(sessionId)
+      && deletionRecord?.status !== 'pending') {
+    return res.status(423).json({ error: 'A room data request is already processing. Please retry shortly.' });
+  }
+  const room = rooms.get(roomCode);
+  const member = findSessionMember(room, sessions, sessionId);
+  if (!member && !deletingSessions.has(sessionId)
+      && !['pending', 'completed'].includes(deletionRecord?.status)) {
+    return res.status(401).json({ error: 'This saved session is invalid for the room.' });
+  }
+  deletingSessions.add(sessionId);
+  const affectedRooms = [...rooms.values()].filter(candidate =>
+    candidate.players.some(player => player.sessionId === sessionId)
+    || (candidate.code === roomCode && deletingRooms.has(candidate.code))
+  );
+  affectedRooms.forEach(candidate => deletingRooms.add(candidate.code));
+  await Promise.all(affectedRooms.map(candidate => waitForRoomWrites(candidate.code)));
+  disconnectSession(sessionId, 'privacy:deleted');
+  try {
+    await persistence.deletePersonalData(sessionId);
+  } catch (error) {
+    console.error(`Personal data deletion did not complete: ${error.name || 'database error'}`);
+    return res.status(503).json({ error: 'Deletion could not be completed. Your session is blocked; please retry.' });
+  }
+  for (const candidate of affectedRooms) {
+    clearGameTimer(candidate.code);
+    const updated = privacyActions.scrubRoomForDeletedPlayer(candidate, sessionId);
+    if (!updated) {
+      clearGameTimer(candidate.code);
+      rooms.delete(candidate.code);
+      deletedRooms.add(candidate.code);
+      deletingRooms.delete(candidate.code);
+      continue;
+    }
+    io.to(candidate.code).emit('player:left');
+    Object.assign(candidate, updated);
+    if (candidate.game) scheduleGameTimer(candidate);
+    broadcastRoom(candidate);
+    try {
+      await persistRoom(candidate, true);
+    } catch (error) {
+      console.error(`Failed to persist anonymized room: ${error.name || 'database error'}`);
+      return res.status(503).json({ error: 'Deletion is pending recovery. Please retry.' });
+    }
+    deletingRooms.delete(candidate.code);
+  }
+  sessions.delete(sessionId);
+  deletingSessions.delete(sessionId);
+  deletedSessionHashes.add(persistence.hashSessionId(sessionId));
+  return res.json({ ok: true });
+}
+
+app.post('/api/privacy/delete-my-data', privacyActionLimit, deleteAuthenticatedPlayerData);
+app.post('/api/privacy/delete-all-my-data', privacyActionLimit, deleteAuthenticatedPlayerData);
+
 io.on('connection', socket => {
   socket.on('room:join', (payload, callback) => {
     try {
       if (!allowSocketEvent(socket)) throw new Error('Too many requests');
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid room credentials');
-      const room = findActiveRoom(parsed.data.roomCode.toUpperCase());
+      const roomCode = parsed.data.roomCode.toUpperCase();
+      if (deletingSessions.has(parsed.data.sessionId)) {
+        throw new Error('Deletion is pending; retry in Privacy & Data Management');
+      }
+      if (deletedSessionHashes.has(persistence.hashSessionId(parsed.data.sessionId))) {
+        throw new Error('This session has been deleted');
+      }
+      if (deletingRooms.has(roomCode)) {
+        throw new Error('This room is temporarily locked while a data request is processed');
+      }
+      const room = findActiveRoom(roomCode);
       if (!room) throw new Error('Room not found');
       const member = findSessionMember(room, sessions, parsed.data.sessionId);
       if (!member) throw new Error('Invalid session for this room');
@@ -488,7 +761,7 @@ io.on('connection', socket => {
           room.status = 'COMPLETED';
           awardCompletionAchievements(game);
           io.to(room.code).emit('game:completed', { scores: publicScores(room), timestamp: Date.now() });
-          persistence.saveGameResult(room).catch(error => console.error('Failed to persist game result:', error.message));
+          persistGameResult(room);
         } else {
           game.currentRound += 1;
           resetRound(game);
@@ -567,15 +840,20 @@ io.on('connection', socket => {
       if (!parsed.success) throw new Error('Invalid leave request');
       const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
       member.online = false;
+      io.to(room.code).emit('player:left', { nickname: member.nickname });
       socket.leave(room.code);
-      socket.to(room.code).emit('player:left', { nickname: member.nickname });
       if (sessionToSockets.get(parsed.data.sessionId) === socket.id) {
         sessionToSockets.delete(parsed.data.sessionId);
       }
       socketToSession.delete(socket.id);
       broadcastRoom(room);
-      persistRoom(room);
-      ack(socket, callback, true, {});
+      persistRoom(room).then(() => {
+        ack(socket, callback, true, {});
+        socket.disconnect(true);
+      }).catch(error => {
+        console.error(`Failed to persist room leave: ${error.name || 'database error'}`);
+        ack(socket, callback, false, { error: 'Could not save your departure.' });
+      });
     } catch (error) { ack(socket, callback, false, { error: error.message }); }
   });
   socket.on('disconnect', () => {
@@ -608,6 +886,11 @@ async function start() {
   }
 
   if (persistence.isConnected()) {
+    await persistence.reconcileDeletionRecords();
+    const deletionHashes = await persistence.listDeletionHashes();
+    deletionHashes.forEach(hash => deletedSessionHashes.add(hash));
+    const deletedRoomCodes = await persistence.listDeletedRoomCodes();
+    deletedRoomCodes.forEach(roomCode => deletedRooms.add(roomCode));
     const recoveredRooms = await persistence.recoverRooms();
     for (const room of recoveredRooms) {
       if (!room.players || room.players.length < 1) continue;
@@ -633,10 +916,13 @@ async function shutdown(signal) {
   setTimeout(() => process.exit(1), 10_000).unref();
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+if (require.main === module) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  start().catch(error => {
+    console.error(`Startup failed: ${error.name || 'unknown error'}`);
+    process.exit(1);
+  });
+}
 
-start().catch(error => {
-  console.error(`Startup failed: ${error.message}`);
-  process.exit(1);
-});
+module.exports = { app, server, start };

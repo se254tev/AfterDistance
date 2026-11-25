@@ -65,6 +65,18 @@
 			],
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "Run frontend help legal validation",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/c",
+				"npm test --prefix frontend && npm run build --prefix frontend"
+			],
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

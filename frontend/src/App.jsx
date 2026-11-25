@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
-import { BrowserRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import './App.css';
 import { copyInvitationText, getInvitationLink, getWhatsAppShareUrl } from './invitations.js';
 import { clearStoredSession, getStoredSession, saveStoredSession } from './session.js';
+import { CentreRoute } from './HelpLegal.jsx';
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
   || (import.meta.env.PROD ? '' : 'http://localhost:3001');
@@ -97,10 +98,24 @@ function Stars() {
 }
 function Brand() { return <Link className="brand" to="/">AFTER<span>DISTANCE</span></Link>; }
 function Shell({ children }) {
-  return <main className="app-shell"><Stars /><header><Brand /><div className="presence"><i /> Private room</div></header>{children}</main>;
+  return <main className="app-shell"><Stars /><header><Brand /><div className="presence"><i /> Private room</div></header>{children}<Footer /></main>;
+}
+
+function Footer() {
+  return <footer className="site-footer" aria-label="Help, legal and contact links">
+    <nav aria-label="Help, Legal and Contact">
+      <Link to="/help">Help &amp; How to Play</Link>
+      <Link to="/copyright">Copyright</Link>
+      <Link to="/privacy-policy">Privacy Policy</Link>
+      <Link to="/terms">User Agreement</Link>
+      <Link to="/contact">Contact Us</Link>
+    </nav>
+    <small>© {new Date().getFullYear()} AfterDistance. All rights reserved.</small>
+  </footer>;
 }
 function Landing() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [resume, setResume] = useState(null);
   const [resumeError, setResumeError] = useState('');
   const [checkAgain, setCheckAgain] = useState(0);
@@ -167,6 +182,8 @@ function Landing() {
     </section>}
     {resumeError && <p className="resume-error" role="status">{resumeError} <button className="text-button" onClick={() => setCheckAgain(value => value + 1)}>Try again</button></p>}
     <div className="actions"><Link className="button primary" to="/create">Create a room</Link><Link className="button ghost" to="/join">Join a room</Link></div>
+    {location.state?.privacyNotice && <p className="privacy-notice" role="status">{location.state.privacyNotice}</p>}
+    <Link className="privacy-link" to="/privacy">Privacy &amp; Data Management</Link>
   </section></Shell>;
 }
 function Entry({ mode }) {
@@ -287,6 +304,10 @@ function RoomPage() {
     socket.on('player:offline', () => setStatus('Your partner is offline'));
     socket.on('player:online', () => setStatus('Your partner has reconnected'));
     socket.on('player:left', () => setStatus('Your partner left the game'));
+    socket.on('room:deleted', () => {
+      clearStoredSession();
+      navigate('/', { replace: true, state: { privacyNotice: 'The room creator deleted this shared game. Your saved room credentials were cleared.' } });
+    });
     socket.on('connection:restored', () => setStatus('Your partner has reconnected'));
     socket.on('error:occurred', payload => setSocketError(payload?.error || 'A connection error occurred.'));
     window.adSocket = socket;
@@ -294,7 +315,7 @@ function RoomPage() {
       socket.disconnect();
       if (window.adSocket === socket) delete window.adSocket;
     };
-  }, [code, roomCode, sessionId, sessionMatchesRoom]);
+  }, [code, navigate, roomCode, sessionId, sessionMatchesRoom]);
   useEffect(() => {
     if (room?.gameConfig) setConfigDraft(room.gameConfig);
     else if (!room?.game) setConfigDraft(DEFAULT_GAME_CONFIG);
@@ -363,6 +384,7 @@ function RoomPage() {
       <div className="room-actions">
         <button className="button ghost" onClick={returnHome} aria-label="Return Home">Return Home</button>
         <button className="text-button" onClick={leaveGame}>Leave Game</button>
+        <Link className="text-button" to="/privacy">Privacy &amp; Data Management</Link>
       </div>
       <div className="player-card"><span className="avatar">{me?.nickname?.[0]}</span><div><b>{me?.nickname}</b><small>{me?.online ? 'You · Online' : 'Offline'}</small></div></div>
       {partner ? <div className="player-card"><span className="avatar partner-avatar">{partner.nickname[0]}</span><div><b>{partner.nickname}</b><small>{partner.online ? 'Partner · Online' : 'Offline'}</small></div></div> :
@@ -425,6 +447,141 @@ function RoomPage() {
     </div>}
   </section></Shell>;
 }
+
+const privacyActions = {
+  identity: {
+    title: 'Delete My Data',
+    confirm: 'Confirm Deletion',
+    description: 'This permanently deletes your guest identity, nickname, session credential, and personal answers and predictions. Your current shared room remains for the other player, but its game progress is cleared and your membership is removed.'
+  },
+  all: {
+    title: 'Delete All My Data',
+    confirm: 'Delete All My Data',
+    description: 'This permanently removes or anonymizes all records linked to your guest session across AfterDistance, including shared historical answers, predictions, scores, and participation. The other player’s profile remains; current shared game progress may be reset.'
+  },
+  leave: {
+    title: 'Leave Current Game',
+    confirm: 'Leave Game',
+    description: 'You will appear offline and your active socket will be disconnected. Your guest session and saved game data are retained, and you may rejoin while the room remains available.'
+  },
+  room: {
+    title: 'Delete This Game',
+    confirm: 'Delete Game',
+    description: 'This permanently deletes the shared room and saved progress, so the other player will lose access too. Only the authenticated room creator can do this.'
+  }
+};
+
+function PrivacyPage() {
+  const navigate = useNavigate();
+  const stored = getStoredSession();
+  const [room, setRoom] = useState(null);
+  const [roomStatus, setRoomStatus] = useState('');
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const hasSession = Boolean(stored.sessionId && stored.roomCode);
+
+  useEffect(() => {
+    if (!hasSession) return undefined;
+    const controller = new AbortController();
+    fetch(API + '/api/sessions/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: stored.sessionId, roomCode: stored.roomCode }),
+      signal: controller.signal
+    }).then(async response => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Your saved room could not be verified.');
+      setRoom(data.room);
+      setRoomStatus('');
+    }).catch(fetchError => {
+      if (fetchError.name !== 'AbortError') {
+        setRoom(null);
+        setRoomStatus(fetchError.message || 'Your saved room could not be verified.');
+      }
+    });
+    return () => controller.abort();
+  }, [hasSession, stored.roomCode, stored.sessionId]);
+
+  async function performAction() {
+    if (!confirmAction || !hasSession || busy) return;
+    setBusy(true);
+    setError('');
+    const route = confirmAction === 'identity'
+      ? '/api/privacy/delete-my-data'
+      : confirmAction === 'all'
+        ? '/api/privacy/delete-all-my-data'
+        : confirmAction === 'leave'
+          ? '/api/rooms/leave'
+          : '/api/rooms/delete';
+    try {
+      const response = await fetch(API + route, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: stored.sessionId, roomCode: stored.roomCode })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'The request could not be completed.');
+      const notice = confirmAction === 'leave'
+        ? 'You left the game. Your guest session and saved data were preserved.'
+        : confirmAction === 'room'
+          ? 'The shared game and its saved progress were deleted.'
+          : 'Your personal data deletion is complete and your session has been invalidated.';
+      if (confirmAction !== 'leave') clearStoredSession();
+      setConfirmAction(null);
+      navigate('/', { replace: true, state: { privacyNotice: notice } });
+    } catch (requestError) {
+      setError(requestError.message || 'The request could not be completed. You can retry.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const actions = [
+    { id: 'identity', title: 'Delete My Data', detail: 'Remove your guest identity and personal game activity while keeping the room for the other player.' },
+    { id: 'leave', title: 'Leave Current Game', detail: 'Disconnect from the room without deleting your guest session or game records.', disabled: !room },
+    { id: 'room', title: 'Delete This Game', detail: 'Remove the shared room and saved game progress. Available to the room creator only.', disabled: !room?.canDelete && !roomStatus.includes('Shared-game deletion is pending') },
+    { id: 'all', title: 'Delete All My Data', detail: 'Run a full cross-collection deletion and anonymization for this guest session.' }
+  ];
+
+  return <Shell><section className="privacy-page">
+    <p className="eyebrow">YOUR ACCOUNT IS A GUEST SESSION</p>
+    <h1>Privacy &amp; Data Management</h1>
+    <p className="privacy-intro">AfterDistance stores a guest token and nickname, room membership, and server-side game state. Answers and predictions stay private until the game reveals them.</p>
+    {!hasSession && <p className="privacy-status">No saved guest session was found in this browser. You can still review these controls; actions require an authenticated session.</p>}
+    {roomStatus && <p className="privacy-status" role="status">{roomStatus} {roomStatus.includes('Shared-game deletion is pending')
+      ? 'The creator can retry the shared deletion below.'
+      : roomStatus.includes('Deletion is pending')
+        ? 'Retry the personal-data deletion below.'
+        : 'Your saved credentials are retained while this request is unresolved.'}</p>}
+    {room && <p className="privacy-status">Current room: {room.roomCode} · Room expires at {new Date(room.expiresAt).toLocaleString()}.</p>}
+    <div className="privacy-actions">
+      {actions.map(action => <article key={action.id}>
+        <div><h2>{action.title}</h2><p>{action.detail}</p></div>
+        <button className="button ghost" disabled={!hasSession || action.disabled || busy} onClick={() => { setError(''); setConfirmAction(action.id); }}>
+          {action.title}
+        </button>
+      </article>)}
+    </div>
+    <p className="privacy-policy">In this guest-only model, the same session token identifies one active room and no separate account preferences. “Delete All My Data” therefore performs the same full session-wide sweep as “Delete My Data.” The other player’s independent guest identity is preserved. If one player’s data is deleted, shared in-progress play is reset rather than deleting the surviving player or room. Minimal one-way token hashes are retained in deletion fences to prevent stale writes and backup restores from reconnecting deleted sessions; raw tokens are not stored in those fences.</p>
+    <p className="privacy-policy">Room data is retained until its 24-hour expiry unless the creator deletes it. Deletion covers the live MongoDB collections; historical Atlas backups may retain earlier copies until their configured retention expires. The repository does not specify the Atlas backup plan. After restoring a backup, operators must reconcile deletion records before serving traffic.</p>
+    {error && <p className="error" role="alert">{error}</p>}
+    <Link className="text-button" to="/">Return Home</Link>
+    {confirmAction && <div className="dialog-backdrop">
+      <section className="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="privacy-confirm-title">
+        <h2 id="privacy-confirm-title">{privacyActions[confirmAction].title}</h2>
+        <p>{privacyActions[confirmAction].description}</p>
+        <div className="dialog-actions">
+          <button className="button ghost" disabled={busy} onClick={() => setConfirmAction(null)}>Cancel</button>
+          <button className="button primary" disabled={busy} onClick={performAction}>
+            {busy ? 'Working…' : privacyActions[confirmAction].confirm}
+          </button>
+        </div>
+      </section>
+    </div>}
+  </section></Shell>;
+}
+
 function Waiting({ partnerText }) { return <div className="waiting-state"><div className="orbit" /><h3>Choice received</h3><p>{partnerText}</p></div>; }
 function AchievementList({ achievements }) {
   if (!achievements?.length) return null;
@@ -468,5 +625,11 @@ export default function App() {
     <Route path="/" element={<Landing />} /><Route path="/create" element={<Entry mode="create" />} />
     <Route path="/join" element={<Entry mode="join" />} /><Route path="/join/:code" element={<Entry mode="join" />} />
     <Route path="/room/:code" element={<RoomPage />} />
+    <Route path="/privacy" element={<PrivacyPage />} />
+    <Route path="/help" element={<Shell><CentreRoute page="help" /></Shell>} />
+    <Route path="/copyright" element={<Shell><CentreRoute page="copyright" /></Shell>} />
+    <Route path="/privacy-policy" element={<Shell><CentreRoute page="privacy" /></Shell>} />
+    <Route path="/terms" element={<Shell><CentreRoute page="terms" /></Shell>} />
+    <Route path="/contact" element={<Shell><CentreRoute page="contact" /></Shell>} />
   </Routes></BrowserRouter>;
 }

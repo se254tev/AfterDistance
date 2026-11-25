@@ -42,9 +42,24 @@ const gameResultSchema = new mongoose.Schema({
   completedAt: Date
 });
 
+const privacyDeletionSchema = new mongoose.Schema({
+  sessionHash: { type: String, required: true, unique: true, index: true },
+  status: { type: String, enum: ['pending', 'completed'], required: true },
+  completedAt: Date
+}, { timestamps: true });
+
+const roomDeletionSchema = new mongoose.Schema({
+  roomCode: { type: String, required: true, unique: true, index: true },
+  ownerHash: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'completed'], required: true },
+  completedAt: Date
+}, { timestamps: true });
+
 module.exports = {
   GuestSession: mongoose.model('GuestSession', guestSessionSchema),
   GameRoom: mongoose.model('GameRoom', gameRoomSchema),
   GameSession: mongoose.model('GameSession', gameSessionSchema),
-  GameResult: mongoose.model('GameResult', gameResultSchema)
+  GameResult: mongoose.model('GameResult', gameResultSchema),
+  PrivacyDeletion: mongoose.model('PrivacyDeletion', privacyDeletionSchema),
+  RoomDeletion: mongoose.model('RoomDeletion', roomDeletionSchema)
 };

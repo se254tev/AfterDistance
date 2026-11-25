@@ -59,6 +59,8 @@ button,input,textarea,select{font:inherit}
 .resume-card small{color:#aaa1b7;font-size:12px}
 .resume-error{max-width:560px;color:#efb2ba;font-size:13px;line-height:1.6}
 .text-button{border:0;background:none;color:#dcb0c0;text-decoration:underline;text-underline-offset:3px;font-size:12px;cursor:pointer;padding:8px}
+.privacy-link{margin-top:22px;color:#cdb4cd;font-size:12px;text-underline-offset:4px}
+.privacy-notice{max-width:560px;margin:20px auto 0;color:#afcbbd;font-size:13px;line-height:1.6}
 .room-actions{display:grid;gap:5px;margin:12px 0}
 .room-actions .button{width:100%;min-height:42px;padding:0 12px;font-size:12px}
 .room-actions .text-button{justify-self:center}
@@ -67,4 +69,43 @@ button,input,textarea,select{font:inherit}
 .exit-dialog h2{margin:0 0 12px;font-family:Georgia,serif;font-size:30px;font-weight:400}
 .exit-dialog p{color:#bcb3c5;font-size:14px;line-height:1.6}
 .dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-top:22px}
+.privacy-page{width:min(820px,calc(100% - 32px));margin:28px auto 60px;padding:clamp(24px,5vw,48px);position:relative;z-index:1;border:1px solid rgba(210,190,220,.12);border-radius:8px;background:rgba(18,20,48,.78);box-shadow:0 30px 80px rgba(4,6,18,.28)}
+.privacy-page h1{margin:0 0 16px;font-family:Georgia,serif;font-size:clamp(34px,6vw,52px);font-weight:400;line-height:1.08}
+.privacy-intro,.privacy-policy,.privacy-status{color:#bcb3c5;font-size:14px;line-height:1.7}
+.privacy-status{padding:12px 14px;border-left:2px solid #a98aaa;background:rgba(181,138,168,.07)}
+.privacy-actions{display:grid;gap:10px;margin:28px 0}
+.privacy-actions article{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px;border:1px solid rgba(210,190,220,.13);border-radius:6px;background:rgba(255,255,255,.025)}
+.privacy-actions h2{margin:0 0 6px;font-family:Georgia,serif;font-size:20px;font-weight:400}
+.privacy-actions p{margin:0;color:#aaa1b7;font-size:12px;line-height:1.6}
+.privacy-actions .button{flex:0 0 auto;min-height:44px;padding:0 14px;font-size:12px}
+.privacy-policy{font-size:12px}
+.privacy-page>.text-button{display:inline-block;margin-top:10px}
 @media(max-width:600px){.resume-card{align-items:stretch;flex-direction:column}.resume-card .button{width:100%}.exit-dialog{padding:24px 20px}.dialog-actions{flex-direction:column-reverse}.dialog-actions .button{width:100%}}
+@media(max-width:600px){.privacy-page{width:calc(100% - 20px);margin:10px auto 30px;padding:24px 18px}.privacy-actions article{align-items:stretch;flex-direction:column}.privacy-actions .button{width:100%}}
+
+.site-footer{position:relative;z-index:2;width:min(1180px,calc(100% - 32px));margin:0 auto;padding:20px 0 28px;text-align:center;color:#9f96af}
+.site-footer nav{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;margin-bottom:12px}
+.site-footer a{color:#cdb4cd;font-size:12px;text-decoration:none}
+.site-footer a:hover{text-decoration:underline;text-underline-offset:4px}
+.site-footer small{font-size:11px}
+.centre-page{position:relative;z-index:1;width:min(820px,calc(100% - 32px));margin:28px auto 40px;padding:clamp(24px,5vw,48px);border:1px solid rgba(210,190,220,.12);border-radius:8px;background:rgba(18,20,48,.78);box-shadow:0 30px 80px rgba(4,6,18,.28)}
+.centre-header h1{margin:0 0 20px;font-family:Georgia,serif;font-size:clamp(34px,6vw,52px);font-weight:400;line-height:1.08}
+.centre-nav{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid rgba(210,190,220,.12)}
+.centre-nav a{min-height:38px;display:inline-flex;align-items:center;padding:8px 10px;border:1px solid rgba(210,190,220,.12);border-radius:4px;color:#cdb4cd;font-size:12px;text-decoration:none}
+.centre-nav a.active{border-color:#b58aa8;background:rgba(181,138,168,.14);color:#fff}
+.centre-draft{margin:0 0 22px;padding:12px 14px;border-left:2px solid #dcb0c0;background:rgba(181,138,168,.08);color:#decad5;font-size:13px;line-height:1.6}
+.centre-content{display:grid;gap:20px}
+.centre-content section{min-width:0}
+.centre-content h2{margin:0 0 9px;font-family:Georgia,serif;font-size:21px;font-weight:400;color:#f6f1fa}
+.centre-content p,.centre-content li{color:#bcb3c5;font-size:14px;line-height:1.75}
+.centre-content p{margin:0 0 10px}
+.centre-content ul,.centre-content ol{margin:7px 0;padding-left:22px}
+.centre-content a{color:#e1bfd0;overflow-wrap:anywhere}
+.centre-content code{padding:2px 5px;border-radius:3px;background:rgba(255,255,255,.07)}
+.centre-tagline{font-family:Georgia,serif;font-size:18px!important;color:#dcb0c0!important}
+.contact-categories{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.contact-categories a{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid rgba(210,190,220,.13);border-radius:5px;text-decoration:none}
+.centre-whatsapp{text-decoration:none}
+.centre-muted{margin-top:16px!important;font-size:12px!important;color:#9f96af!important}
+.centre-back{display:inline-block;margin-top:18px}
+@media(max-width:600px){.centre-page{width:calc(100% - 20px);margin:10px auto 30px;padding:24px 18px}.centre-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.centre-nav a{justify-content:center;text-align:center}.contact-categories{grid-template-columns:minmax(0,1fr)}.site-footer{padding-bottom:calc(24px + env(safe-area-inset-bottom))}}

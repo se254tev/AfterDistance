@@ -17,7 +17,9 @@ Render
             ├─ guest sessions
             ├─ rooms
             ├─ game sessions
-            └─ game results
+            ├─ game results
+            ├─ privacy deletion fences
+            └─ room deletion fences
 ```
 
 The backend remains server-authoritative. MongoDB stores durable snapshots and results, while the in-memory Maps are the live state cache for the one Render process. A restart reloads valid room snapshots from Atlas.
@@ -88,6 +90,16 @@ Atlas stores:
 - `GameResult`: final players, round results and final scores
 
 Private answers and predictions are persisted in MongoDB as server-authoritative game state. They must never be sent to a browser except in reveal results after both predictions complete. Timer deadlines are absolute server timestamps, so reconnecting players share the current phase and countdown; a restarted server restores the deadline from the room snapshot.
+
+Privacy deletion also affects the `GuestSession`, `GameRoom`, `GameSession`, and `GameResult` collections. `PrivacyDeletion` stores a SHA-256 hash of a deleted guest token and a staged `pending`/`completed` status; `RoomDeletion` stores the public room code, a hash of the authorized creator token, and a staged status. Neither collection stores a raw guest token. These records fence stale writes and are checked during startup reconciliation before room recovery. They are retained as operational deletion markers so later writes and supported backup restores can be scrubbed.
+
+### Backup retention and restoration
+
+Deleting records from the live database does **not** delete copies already present in Atlas backups or point-in-time recovery history. The repository contains no Atlas project/cluster plan or backup schedule, so it cannot establish whether automated backups, snapshots, or point-in-time recovery are enabled or how long they are retained. The operator must inspect the current Atlas project and plan; do not infer those capabilities from this application configuration.
+
+When restoring a backup that includes deletion fences, keep the application out of service until startup reconciliation has run: it scans active documents for token IDs matching retained deletion hashes, scrubs those records, and processes deleted-room markers before recovering rooms. If the restored backup predates a deletion fence, this application cannot detect that deletion from the restored database alone. Reapply the deletion ledger from a separately protected current source or perform a manual scrub before serving traffic. Copies in backups expire only according to the actual Atlas retention policy; this application does not delete backup copies.
+
+Personal deletion is staged and idempotent rather than relying on MongoDB transactions, because the configured Atlas deployment/transaction capability is not available in this repository. A pending tombstone blocks live writes and is retried on the next authenticated request or startup reconciliation. If the database is unavailable, deletion endpoints fail rather than reporting completion.
 
 ## 6. Render
 
@@ -160,7 +172,11 @@ Multiple origins are comma-separated. The Socket.IO and Express servers use the 
 
 ## 9. Reconnection and room recovery
 
-Valid room snapshots are restored on backend restart. Restored players begin offline and can reconnect using the session token stored in browser `localStorage`; existing tab-only sessions are migrated on their next visit. The Home screen validates the saved token and room before offering **Resume Your Game**. Returning Home preserves the session and room; **Leave Game** is a separately confirmed action that marks the player offline. Expired rooms are removed from memory and Atlas. Private answers remain in snapshots and are exposed only through `publicGame()` after reveal rules allow it.
+Valid room snapshots are restored on backend restart. Restored players begin offline and can reconnect using the session token stored in browser `localStorage`; existing tab-only sessions are migrated on their next visit. The Home screen validates the saved token and room before offering **Resume Your Game**. Returning Home preserves the session and room; **Leave Game** is a separately confirmed action that marks the player offline and disconnects their socket. Expired rooms are removed from memory and Atlas. Private answers remain in snapshots and are exposed only through `publicGame()` after reveal rules allow it.
+
+After personal deletion, the guest credential is invalidated, connected sockets are disconnected, the requesting player is removed from the room, and shared in-progress play is reset. The surviving player and room remain. Deleting a shared game requires the creator's authenticated session (a room code alone is insufficient); it deletes both players' game and guest-session records and invalidates access for both.
+
+The authenticated endpoints are `POST /api/privacy/delete-my-data`, `POST /api/privacy/delete-all-my-data`, `POST /api/rooms/leave`, and `POST /api/rooms/delete`. Personal deletion accepts the requesting session's own token and room; it does not accept a target player identifier. Room deletion also checks that the token belongs to the room creator. Deletion endpoints are rate-limited independently of the general API limit.
 
 Keep the Render instance count at one. MongoDB persistence supports restart recovery, but horizontal scaling still requires a Socket.IO adapter and cross-process coordination.
 
