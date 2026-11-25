@@ -52,3 +52,19 @@ button,input,textarea,select{font:inherit}
 .achievement-list article b{font-size:12px;overflow-wrap:anywhere}
 .achievement-list article small{color:#aaa1b7;font-size:11px;line-height:1.4;overflow-wrap:anywhere}
 @media(max-width:420px){.game-setup-row{grid-template-columns:minmax(0,1fr)}}
+.resume-card{width:min(560px,100%);display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 24px;padding:18px 20px;text-align:left;border:1px solid rgba(210,190,220,.16);border-radius:6px;background:rgba(18,20,48,.72)}
+.resume-card>div{display:grid;gap:6px;min-width:0}
+.resume-card .eyebrow{margin:0}
+.resume-card b,.resume-card small{overflow-wrap:anywhere}
+.resume-card small{color:#aaa1b7;font-size:12px}
+.resume-error{max-width:560px;color:#efb2ba;font-size:13px;line-height:1.6}
+.text-button{border:0;background:none;color:#dcb0c0;text-decoration:underline;text-underline-offset:3px;font-size:12px;cursor:pointer;padding:8px}
+.room-actions{display:grid;gap:5px;margin:12px 0}
+.room-actions .button{width:100%;min-height:42px;padding:0 12px;font-size:12px}
+.room-actions .text-button{justify-self:center}
+.dialog-backdrop{position:fixed;inset:0;z-index:10;display:grid;place-items:center;padding:20px;background:rgba(3,5,16,.78);backdrop-filter:blur(8px)}
+.exit-dialog{width:min(460px,100%);padding:30px;border:1px solid rgba(210,190,220,.2);border-radius:8px;background:#151630;box-shadow:0 28px 80px rgba(0,0,0,.5)}
+.exit-dialog h2{margin:0 0 12px;font-family:Georgia,serif;font-size:30px;font-weight:400}
+.exit-dialog p{color:#bcb3c5;font-size:14px;line-height:1.6}
+.dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-top:22px}
+@media(max-width:600px){.resume-card{align-items:stretch;flex-direction:column}.resume-card .button{width:100%}.exit-dialog{padding:24px 20px}.dialog-actions{flex-direction:column-reverse}.dialog-actions .button{width:100%}}

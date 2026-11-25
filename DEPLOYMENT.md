@@ -160,7 +160,7 @@ Multiple origins are comma-separated. The Socket.IO and Express servers use the 
 
 ## 9. Reconnection and room recovery
 
-Valid room snapshots are restored on backend restart. Restored players begin offline and can reconnect using the session token stored in browser `sessionStorage`. Expired rooms are removed from memory and Atlas. Private answers remain in snapshots and are exposed only through `publicGame()` after reveal rules allow it.
+Valid room snapshots are restored on backend restart. Restored players begin offline and can reconnect using the session token stored in browser `localStorage`; existing tab-only sessions are migrated on their next visit. The Home screen validates the saved token and room before offering **Resume Your Game**. Returning Home preserves the session and room; **Leave Game** is a separately confirmed action that marks the player offline. Expired rooms are removed from memory and Atlas. Private answers remain in snapshots and are exposed only through `publicGame()` after reveal rules allow it.
 
 Keep the Render instance count at one. MongoDB persistence supports restart recovery, but horizontal scaling still requires a Socket.IO adapter and cross-process coordination.
 

@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { BrowserRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import './App.css';
 import { copyInvitationText, getInvitationLink, getWhatsAppShareUrl } from './invitations.js';
-import { getStoredSession, saveStoredSession } from './session.js';
+import { clearStoredSession, getStoredSession, saveStoredSession } from './session.js';
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
   || (import.meta.env.PROD ? '' : 'http://localhost:3001');
@@ -100,11 +100,72 @@ function Shell({ children }) {
   return <main className="app-shell"><Stars /><header><Brand /><div className="presence"><i /> Private room</div></header>{children}</main>;
 }
 function Landing() {
+  const navigate = useNavigate();
+  const [resume, setResume] = useState(null);
+  const [resumeError, setResumeError] = useState('');
+  const [checkAgain, setCheckAgain] = useState(0);
+  useEffect(() => {
+    const stored = getStoredSession();
+    if (!stored.sessionId || !stored.roomCode) return undefined;
+    const controller = new AbortController();
+    fetch(API + '/api/sessions/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: stored.sessionId, roomCode: stored.roomCode }),
+      signal: controller.signal
+    }).then(async response => {
+      const data = await response.json();
+      if (!response.ok) {
+        if ([400, 401, 404].includes(response.status)) clearStoredSession();
+        throw new Error(data.error || 'Unable to restore your saved game.');
+      }
+      setResume({ room: data.room, nickname: stored.nickname || data.room?.me?.nickname || '' });
+      setResumeError('');
+    }).catch(error => {
+      if (error.name !== 'AbortError') {
+        setResume(null);
+        setResumeError(error.message || 'Unable to check your saved game.');
+      }
+    });
+    return () => controller.abort();
+  }, [checkAgain]);
+  async function resumeGame() {
+    const stored = getStoredSession();
+    setResumeError('');
+    try {
+      const response = await fetch(API + '/api/sessions/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: stored.sessionId, roomCode: stored.roomCode })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if ([400, 401, 404].includes(response.status)) {
+          clearStoredSession();
+          setResume(null);
+        }
+        throw new Error(data.error || 'Unable to restore your saved game.');
+      }
+      navigate(`/room/${data.room.roomCode}`);
+    } catch (error) {
+      setResumeError(error.message || 'Unable to restore your saved game.');
+    }
+  }
+  const gameStatus = resume?.room?.game
+    ? resume.room.game.currentPhase === 'COMPLETED'
+      ? 'Game completed'
+      : `In progress · Round ${resume.room.game.currentRound} of ${resume.room.game.totalRounds}`
+    : resume?.room?.partner ? 'Waiting for both players to get ready' : 'Waiting for your partner';
   return <Shell><section className="hero">
     <div className="orb"><div className="heart">♡</div></div>
     <p className="eyebrow">A PRIVATE WORLD FOR TWO</p>
     <h1>Two hearts.<br /><em>One shared world.</em></h1>
     <p className="lead">Turn the distance between you into moments of discovery.</p>
+    {resume && <section className="resume-card" aria-label="Existing game">
+      <div><p className="eyebrow">YOUR SAVED GAME</p><b>{resume.nickname || 'Your room'} · {resume.room.roomCode}</b><small>{gameStatus}</small></div>
+      <button className="button primary" onClick={resumeGame}>Resume Your Game</button>
+    </section>}
+    {resumeError && <p className="resume-error" role="status">{resumeError} <button className="text-button" onClick={() => setCheckAgain(value => value + 1)}>Try again</button></p>}
     <div className="actions"><Link className="button primary" to="/create">Create a room</Link><Link className="button ghost" to="/join">Join a room</Link></div>
   </section></Shell>;
 }
@@ -115,6 +176,35 @@ function Entry({ mode }) {
   const [code, setCode] = useState(routeCode ? routeCode.toUpperCase() : '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [recoveringInvite, setRecoveringInvite] = useState(() => {
+    const stored = getStoredSession();
+    return mode === 'join' && Boolean(routeCode && stored.sessionId && stored.roomCode?.toUpperCase() === routeCode.toUpperCase());
+  });
+  useEffect(() => {
+    if (mode !== 'join' || !routeCode) return undefined;
+    const stored = getStoredSession();
+    if (!stored.sessionId || stored.roomCode?.toUpperCase() !== routeCode.toUpperCase()) return undefined;
+    const controller = new AbortController();
+    fetch(API + '/api/sessions/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: stored.sessionId, roomCode: stored.roomCode }),
+      signal: controller.signal
+    }).then(async response => {
+      const data = await response.json();
+      if (response.ok) {
+        navigate(`/room/${data.room.roomCode}`);
+        return;
+      }
+      if ([400, 401, 404].includes(response.status)) clearStoredSession();
+      throw new Error(data.error || 'Unable to restore the saved room.');
+    }).catch(err => {
+      if (err.name !== 'AbortError') setError(err.message || 'Unable to restore the saved room.');
+    }).finally(() => {
+      if (!controller.signal.aborted) setRecoveringInvite(false);
+    });
+    return () => controller.abort();
+  }, [mode, navigate, routeCode]);
   async function submit(event) {
     event.preventDefault(); setLoading(true); setError('');
     try {
@@ -123,26 +213,31 @@ function Entry({ mode }) {
       const response = await fetch(API + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not enter the room.');
-      saveStoredSession({ sessionId: data.sessionId, roomCode: data.roomCode, nickname });
+      if (!saveStoredSession({ sessionId: data.sessionId, roomCode: data.roomCode, nickname })) {
+        throw new Error('Your session could not be saved in this browser. Check storage permissions and try again.');
+      }
       navigate(`/room/${data.roomCode}`);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }
   return <Shell><section className="entry-card">
     <p className="eyebrow">{mode === 'create' ? 'BEGIN TOGETHER' : 'ENTER YOUR WORLD'}</p>
     <h2>{mode === 'create' ? 'Create a private room' : 'Join your partner'}</h2>
+    {recoveringInvite && <p role="status">Checking your saved session for this room…</p>}
     <form onSubmit={submit}>
       {mode === 'join' && <label>Invitation code<input value={code} onChange={e => setCode(e.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 12).toUpperCase())} placeholder="XXXXXXXXXXXX" maxLength={12} required /></label>}
       <label>Your nickname<input value={nickname} onChange={e => setNickname(e.target.value)} placeholder="How should your partner know you?" minLength={2} maxLength={24} required /></label>
       {error && <p className="error">{error}</p>}
-      <button className="button primary" disabled={loading}>{loading ? 'Opening...' : mode === 'create' ? 'Create my room' : 'Join room'} <span>→</span></button>
+      <button className="button primary" disabled={loading || recoveringInvite}>{recoveringInvite ? 'Restoring...' : loading ? 'Opening...' : mode === 'create' ? 'Create my room' : 'Join room'} <span>→</span></button>
     </form>
   </section></Shell>;
 }
 
 function RoomPage() {
   const { code } = useParams();
+  const navigate = useNavigate();
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('Connecting...');
+  const [recoveryError, setRecoveryError] = useState('');
   const [answer, setAnswer] = useState('');
   const [answerStyle, setAnswerStyle] = useState('');
   const [prediction, setPrediction] = useState('');
@@ -151,27 +246,55 @@ function RoomPage() {
   const [configDraft, setConfigDraft] = useState(DEFAULT_GAME_CONFIG);
   const [serverOffset, setServerOffset] = useState(0);
   const [clockNow, setClockNow] = useState(Date.now());
+  const [exitAction, setExitAction] = useState(null);
   const stored = getStoredSession();
+  const sessionId = stored.sessionId;
+  const roomCode = stored.roomCode;
+  const sessionMatchesRoom = Boolean(sessionId && roomCode && roomCode.toUpperCase() === code.toUpperCase());
   function syncRoom(nextRoom) {
     setRoom(nextRoom);
     if (nextRoom?.game?.serverNow) setServerOffset(nextRoom.game.serverNow - Date.now());
   }
   useEffect(() => {
-    if (!stored.sessionId || !stored.roomCode || stored.roomCode !== code) return;
+    if (!sessionMatchesRoom) return undefined;
     const socket = io(API, { transports: ['websocket', 'polling'], reconnection: true, reconnectionDelay: 300, timeout: 5000 });
+    let connectedBefore = false;
     socket.on('connect', () => {
-      setStatus('Connected');
-      socket.emit('room:join', { roomCode: stored.roomCode, sessionId: stored.sessionId }, result => result?.ok && syncRoom(result.room));
+      setStatus(connectedBefore ? 'Connection restored' : 'Connected');
+      connectedBefore = true;
+      setRecoveryError('');
+      socket.emit('room:join', { roomCode, sessionId }, result => {
+        if (result?.ok) {
+          syncRoom(result.room);
+          setRecoveryError('');
+        } else {
+          setRoom(null);
+          if (/room not found/i.test(result?.error || '')) {
+            clearStoredSession();
+            setRecoveryError('Room no longer available. Return Home to start or join another room.');
+          } else if (/session|member/i.test(result?.error || '')) {
+            clearStoredSession();
+            setRecoveryError('Session expired or invalid. Return Home to join an available room.');
+          } else {
+            setRecoveryError(result?.error || 'Unable to restore game.');
+          }
+        }
+      });
     });
     socket.on('disconnect', () => setStatus('Reconnecting...'));
+    socket.on('connect_error', () => setStatus('Reconnecting...'));
     socket.on('room:updated', syncRoom);
-    socket.on('player:offline', () => setStatus('Partner offline'));
-    socket.on('player:online', () => setStatus('Partner is online'));
-    socket.on('connection:restored', () => setStatus('Connection restored'));
+    socket.on('player:offline', () => setStatus('Your partner is offline'));
+    socket.on('player:online', () => setStatus('Your partner has reconnected'));
+    socket.on('player:left', () => setStatus('Your partner left the game'));
+    socket.on('connection:restored', () => setStatus('Your partner has reconnected'));
     socket.on('error:occurred', payload => setSocketError(payload?.error || 'A connection error occurred.'));
     window.adSocket = socket;
-    return () => { socket.disconnect(); delete window.adSocket; };
-  }, [code]);
+    return () => {
+      socket.disconnect();
+      if (window.adSocket === socket) delete window.adSocket;
+    };
+  }, [code, roomCode, sessionId, sessionMatchesRoom]);
   useEffect(() => {
     if (room?.gameConfig) setConfigDraft(room.gameConfig);
     else if (!room?.game) setConfigDraft(DEFAULT_GAME_CONFIG);
@@ -183,8 +306,10 @@ function RoomPage() {
     const timer = setInterval(() => setClockNow(Date.now()), 250);
     return () => clearInterval(timer);
   }, [room?.game?.deadlineAt]);
-  if (!stored.sessionId) return <Shell><section className="entry-card"><h2>Session unavailable</h2><Link className="button primary" to="/">Return home</Link></section></Shell>;
-  if (!room) return <Shell><section className="entry-card"><div className="loader" /><h2>Opening your room...</h2></section></Shell>;
+  if (!stored.sessionId) return <Shell><section className="entry-card"><h2>Session unavailable</h2><p>Your saved session could not be found. Resume from Home or join with a valid invitation.</p><Link className="button primary" to="/">Return home</Link></section></Shell>;
+  if (!sessionMatchesRoom) return <Shell><section className="entry-card"><h2>Session unavailable</h2><p>No saved session matches this room. Resume from Home or use a valid invitation.</p><Link className="button primary" to="/">Return home</Link></section></Shell>;
+  if (!room && recoveryError) return <Shell><section className="entry-card"><h2>Unable to restore game</h2><p className="error" role="alert">{recoveryError}</p><Link className="button primary" to="/">Return home</Link></section></Shell>;
+  if (!room) return <Shell><section className="entry-card"><div className="loader" /><h2>Opening your room...</h2><p>{status}</p></section></Shell>;
   const me = room.me;
   const partner = room.partner;
   const game = room.game;
@@ -214,9 +339,31 @@ function RoomPage() {
       setInvitationFeedback('Could not copy. Please copy it manually.');
     }
   }
+  function returnHome() {
+    setExitAction('home');
+  }
+  function leaveGame() {
+    setExitAction('leave');
+  }
+  function confirmExit() {
+    if (exitAction === 'home') {
+      navigate('/');
+      return;
+    }
+    if (exitAction === 'leave') {
+      window.adSocket?.emit('room:leave', { roomCode: stored.roomCode, sessionId: stored.sessionId }, result => {
+        if (result?.ok) navigate('/');
+        else setSocketError(result?.error || 'Could not leave the game.');
+      });
+    }
+  }
 
   return <Shell><section className="room-layout">
     <aside><p className="eyebrow">SHARED ROOM</p><div className="room-code"><h3>{stored.roomCode}</h3><button className="copy" onClick={() => copyInvitation(stored.roomCode, 'Room code copied.')}>Copy Room Code</button></div>
+      <div className="room-actions">
+        <button className="button ghost" onClick={returnHome} aria-label="Return Home">Return Home</button>
+        <button className="text-button" onClick={leaveGame}>Leave Game</button>
+      </div>
       <div className="player-card"><span className="avatar">{me?.nickname?.[0]}</span><div><b>{me?.nickname}</b><small>{me?.online ? 'You · Online' : 'Offline'}</small></div></div>
       {partner ? <div className="player-card"><span className="avatar partner-avatar">{partner.nickname[0]}</span><div><b>{partner.nickname}</b><small>{partner.online ? 'Partner · Online' : 'Offline'}</small></div></div> :
         <div className="waiting-card"><div className="pulse" /><span>Waiting for your partner</span>
@@ -264,6 +411,18 @@ function RoomPage() {
         {game.achievements?.length > 0 && <AchievementList achievements={game.achievements} />}
       </>}
     </div>
+    {exitAction && <div className="dialog-backdrop">
+      <section className="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="exit-title">
+        <h2 id="exit-title">{exitAction === 'home' ? 'Return to Home?' : 'Leave Game?'}</h2>
+        <p>{exitAction === 'home'
+          ? 'Your game session will be preserved. You can return to this room later if it is still available.'
+          : 'You will appear offline to your partner. Your room and game progress will remain available until the room expires.'}</p>
+        <div className="dialog-actions">
+          <button className="button ghost" onClick={() => setExitAction(null)}>Continue Playing</button>
+          <button className="button primary" onClick={confirmExit}>{exitAction === 'home' ? 'Return Home' : 'Leave Game'}</button>
+        </div>
+      </section>
+    </div>}
   </section></Shell>;
 }
 function Waiting({ partnerText }) { return <div className="waiting-state"><div className="orbit" /><h3>Choice received</h3><p>{partnerText}</p></div>; }

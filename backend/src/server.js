@@ -20,6 +20,7 @@ const {
 } = require('./game/otherSide');
 const persistence = require('./persistence');
 const socketValidation = require('./socket-validation');
+const { findSessionMember } = require('./session-recovery');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -96,7 +97,7 @@ function publicRoom(room) {
 function roomView(room, sessionId) {
   const view = publicRoom(room);
   view.me = room.players.find(p => p.sessionId === sessionId) || null;
-  if (view.me) view.me = { nickname: view.me.nickname, ready: view.me.ready, online: view.me.online, sessionId };
+  if (view.me) view.me = { nickname: view.me.nickname, ready: view.me.ready, online: view.me.online };
   const partner = room.players.find(p => p.sessionId !== sessionId) || null;
   view.partner = partner ? { nickname: partner.nickname, ready: partner.ready, online: partner.online } : null;
   view.game = room.game ? publicGame(room.game, sessionId) : null;
@@ -156,9 +157,11 @@ function ack(socket, callback, ok, payload) {
 function validateSocket(socket, token, codeValue) {
   const room = findActiveRoom(codeValue);
   if (!room) throw new Error('Room not found');
-  const member = room.players.find(p => p.sessionId === token);
-  if (!member) throw new Error('You are not a member of this room');
-  if (socketToSession.get(socket.id) !== token) throw new Error('Invalid session');
+  const member = findSessionMember(room, sessions, token);
+  if (!member) throw new Error('Invalid session for this room');
+  if (socketToSession.get(socket.id) !== token || sessionToSockets.get(token) !== socket.id) {
+    throw new Error('Invalid session');
+  }
   return { room, member };
 }
 function resetRound(game) {
@@ -301,6 +304,19 @@ app.post('/api/rooms/join', roomJoinLimit, async (req, res) => {
   res.status(200).json({ roomCode, sessionId, room: roomView(room, sessionId), inviteUrl: `/join/${roomCode}` });
 });
 
+app.post('/api/sessions/resume', (req, res) => {
+  const parsed = z.object({
+    roomCode: z.string().trim().regex(/^[a-f0-9]{12}$/i),
+    sessionId: z.string().min(32).max(128)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Valid room credentials are required.' });
+  const room = findActiveRoom(parsed.data.roomCode.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'This room is no longer available.' });
+  const member = findSessionMember(room, sessions, parsed.data.sessionId);
+  if (!member) return res.status(401).json({ error: 'This saved session is invalid for the room.' });
+  return res.json({ room: roomView(room, member.sessionId) });
+});
+
 io.on('connection', socket => {
   socket.on('room:join', (payload, callback) => {
     try {
@@ -309,14 +325,23 @@ io.on('connection', socket => {
       if (!parsed.success) throw new Error('Invalid room credentials');
       const room = findActiveRoom(parsed.data.roomCode.toUpperCase());
       if (!room) throw new Error('Room not found');
-      const member = room.players.find(p => p.sessionId === parsed.data.sessionId);
-      if (!member) throw new Error('You are not a member of this room');
+      const member = findSessionMember(room, sessions, parsed.data.sessionId);
+      if (!member) throw new Error('Invalid session for this room');
+      const boundSession = socketToSession.get(socket.id);
+      if (boundSession && boundSession !== parsed.data.sessionId) throw new Error('Socket is already bound to another session');
+      const previousSocketId = sessionToSockets.get(parsed.data.sessionId);
       member.online = true;
-      socket.join(room.code); socketToSession.set(socket.id, parsed.data.sessionId); sessionToSockets.set(parsed.data.sessionId, socket.id);
-      io.to(room.code).emit('player:online', { nickname: member.nickname });
+      socket.join(room.code);
+      socketToSession.set(socket.id, parsed.data.sessionId);
+      sessionToSockets.set(parsed.data.sessionId, socket.id);
+      if (previousSocketId && previousSocketId !== socket.id) {
+        io.sockets.sockets.get(previousSocketId)?.disconnect(true);
+      }
+      socket.to(room.code).emit('player:online', { nickname: member.nickname });
       broadcastRoom(room);
       ack(socket, callback, true, { room: roomView(room, parsed.data.sessionId) });
-      io.to(room.code).emit('connection:restored');
+      socket.to(room.code).emit('connection:restored');
+      persistRoom(room);
     } catch (error) { ack(socket, callback, false, { error: error.message }); socket.emit('error:occurred', { error: error.message }); }
   });
 
@@ -541,8 +566,13 @@ io.on('connection', socket => {
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid leave request');
       const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
-      member.online = false; socket.leave(room.code);
-      io.to(room.code).emit('player:left', { nickname: member.nickname });
+      member.online = false;
+      socket.leave(room.code);
+      socket.to(room.code).emit('player:left', { nickname: member.nickname });
+      if (sessionToSockets.get(parsed.data.sessionId) === socket.id) {
+        sessionToSockets.delete(parsed.data.sessionId);
+      }
+      socketToSession.delete(socket.id);
       broadcastRoom(room);
       persistRoom(room);
       ack(socket, callback, true, {});
