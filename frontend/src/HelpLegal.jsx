@@ -8,12 +8,6 @@ function contactUrl(category) {
   return `https://wa.me/${supportNumber}?text=${encodeURIComponent(message)}`;
 }
 
-function DraftNotice() {
-  return <p className="centre-draft" role="note">
-    Draft for owner and legal review. This page is not a substitute for professional legal advice and should not be presented as a final binding document until approved.
-  </p>;
-}
-
 function CentreNav({ active }) {
   const links = [
     ['help', '/help', 'Help & How to Play'],
@@ -27,14 +21,13 @@ function CentreNav({ active }) {
   </nav>;
 }
 
-function Page({ active, title, eyebrow, children, includeDraft = false }) {
+function Page({ active, title, eyebrow, children }) {
   return <section className="centre-page">
     <header className="centre-header">
       <p className="eyebrow">{eyebrow}</p>
       <h1>{title}</h1>
     </header>
     <CentreNav active={active} />
-    {includeDraft && <DraftNotice />}
     <article className="centre-content">{children}</article>
     <Link className="text-button centre-back" to="/">Return to AfterDistance</Link>
   </section>;
@@ -103,7 +96,7 @@ function HelpPage() {
 }
 
 function CopyrightPage() {
-  return <Page active="copyright" title="Copyright Protection" eyebrow="PROPRIETARY RIGHTS" includeDraft>
+  return <Page active="copyright" title="Copyright Protection" eyebrow="PROPRIETARY RIGHTS">
     <section>
       <h2>Ownership</h2>
       <p>Subject to applicable law and any third-party rights, AfterDistance retains ownership of its original software, source code, application design, graphics, branding, original game content, questions, text, illustrations and other original materials. Ownership is not established by this page for any third-party material or for content submitted by users.</p>
@@ -133,7 +126,7 @@ function CopyrightPage() {
 }
 
 function PrivacyPolicyPage() {
-  return <Page active="privacy" title="Data Protection & Privacy Policy" eyebrow="GUEST DATA NOTICE" includeDraft>
+  return <Page active="privacy" title="Data Protection & Privacy Policy" eyebrow="GUEST DATA NOTICE">
     <section>
       <h2>Information we collect</h2>
       <p>AfterDistance stores or processes:</p>
@@ -171,7 +164,7 @@ function PrivacyPolicyPage() {
     <section>
       <h2>User rights</h2>
       <p>Subject to the Constitution of Kenya, Article 31, the Data Protection Act, 2019 and applicable Data Protection Regulations, 2021, individuals may have the right to be informed about processing, request access to their personal data, object to certain processing, request correction of inaccurate or misleading information, request deletion where applicable, and use other remedies provided by law.</p>
-      <p>Use the in-app data controls for guest-session deletion and contact support if you need help locating or correcting information. A product owner or data controller identity has not been supplied and should be inserted only after confirmation.</p>
+      <p>Use the in-app data controls for guest-session deletion and contact support if you need help locating or correcting information.</p>
     </section>
     <section>
       <h2>Data deletion</h2>
@@ -179,7 +172,7 @@ function PrivacyPolicyPage() {
     </section>
     <section>
       <h2>Children and minors</h2>
-      <p>AfterDistance is a general recreational two-player experience; no separately approved age restriction or child-account system is represented by the current code. Where a player is a minor, a parent or guardian should supervise participation and applicable Kenyan law and protections should be considered. No special age-verification or guardian-consent process is implemented.</p>
+      <p>AfterDistance is a general recreational two-player experience and does not have an age-verification or guardian-consent process. Parents or guardians should supervise any minor’s participation and consider applicable legal protections.</p>
     </section>
     <section>
       <h2>Privacy questions and complaints</h2>
@@ -189,7 +182,7 @@ function PrivacyPolicyPage() {
 }
 
 function TermsPage() {
-  return <Page active="terms" title="User Agreement & Terms of Use" eyebrow="GUEST SERVICE TERMS" includeDraft>
+  return <Page active="terms" title="User Agreement & Terms of Use" eyebrow="GUEST SERVICE TERMS">
     <section><h2>1. Acceptance</h2><p>By creating or joining a room or otherwise using AfterDistance, you agree to these terms to the extent applicable law permits. If you do not agree, do not use the service.</p></section>
     <section><h2>2. Description of the service</h2><p>AfterDistance is a real-time recreational experience for two players, offering questions, predictions, challenges, scoring and achievements.</p></section>
     <section><h2>3. Guest access and nicknames</h2><p>Use does not require a registered account, but the application creates a guest session and stores a nickname and room credential in browser and server data. You are responsible for protecting access to your browser session.</p></section>
@@ -205,7 +198,7 @@ function TermsPage() {
     <section><h2>13. Room expiration and deletion</h2><p>Rooms expire according to the implemented 24-hour room rule unless deleted earlier or removed by operational expiry. Game progress may become unavailable after expiration or shared-room deletion.</p></section>
     <section><h2>14. Service availability</h2><p>The service is provided as an application that may experience maintenance, outages, updates or temporary incompatibilities. Reasonable efforts may be made to preserve data and connections, but uninterrupted availability is not guaranteed.</p></section>
     <section><h2>15. Third-party services</h2><p>AfterDistance may depend on Netlify, Render, MongoDB Atlas and other third-party services. Their availability and terms are outside this application’s control.</p></section>
-    <section><h2>16. Changes</h2><p>Features or these terms may change as the application develops. Material changes should be made available through the application and the date of the current draft noted through ordinary product review.</p></section>
+    <section><h2>16. Changes</h2><p>These terms may be updated as the service changes. Any updated version applies only as permitted by applicable law.</p></section>
     <section><h2>17. Suspension or termination</h2><p>Where justified, access to a room or the service may be suspended or removed to address unauthorized access, abuse, security risk or serious violations. These measures should respect applicable law and user rights.</p></section>
     <section><h2>18. Contact</h2><p>Contact AfterDistance through <a href={contactUrl('a general enquiry')} target="_blank" rel="noopener noreferrer">WhatsApp at {supportDisplay}</a>.</p></section>
     <section><h2>19. Governing law</h2><p>These terms are intended for use in Kenya and are governed by applicable Kenyan law, subject to mandatory rights and any court jurisdiction applicable to a dispute. No waiver of statutory rights is intended.</p></section>

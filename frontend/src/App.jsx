@@ -98,7 +98,7 @@ function Stars() {
 }
 function Brand() { return <Link className="brand" to="/">AFTER<span>DISTANCE</span></Link>; }
 function Shell({ children }) {
-  return <main className="app-shell"><Stars /><header><Brand /><div className="presence"><i /> Private room</div></header>{children}<Footer /></main>;
+  return <main className="app-shell"><Stars /><header className="site-header"><Brand /><div className="presence"><i /> Private room</div></header>{children}<Footer /></main>;
 }
 
 function Footer() {

@@ -22,11 +22,11 @@ test('homepage footer exposes all centre destinations', () => {
   assert.match(appSource, /Contact Us/);
 });
 
-test('contact centre uses the official WhatsApp number and draft notices are present', () => {
+test('contact centre uses the official WhatsApp number and legal pages have no draft notices', () => {
   assert.match(centreSource, /\+254 797 819 571/);
   assert.match(centreSource, /254797819571/);
   assert.match(centreSource, /Office of the Data Protection Commissioner/);
-  assert.equal((centreSource.match(/Draft for owner and legal review/g) || []).length, 1);
+  assert.doesNotMatch(centreSource, /draft|owner and legal review|not a substitute for professional legal advice|final binding document until approved/i);
   assert.match(centreSource, /Copyright Act, 2001/);
   assert.match(centreSource, /Data Protection Act, 2019/);
 });
