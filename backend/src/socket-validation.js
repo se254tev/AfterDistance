@@ -29,6 +29,21 @@ module.exports = {
   roomPayloadSchema,
   gameConfigSchema,
   gameConfigPayloadSchema: roomPayloadSchema.extend({ config: gameConfigSchema }),
+  experienceSwitchRequestSchema: roomPayloadSchema.extend({
+    kind: z.enum(['switch', 'replay']),
+    config: gameConfigSchema.optional()
+  }).superRefine((request, context) => {
+    if (request.kind === 'switch' && !request.config) {
+      context.addIssue({ code: 'custom', path: ['config'], message: 'A valid experience configuration is required' });
+    }
+    if (request.kind === 'replay' && request.config) {
+      context.addIssue({ code: 'custom', path: ['config'], message: 'Replay configuration is selected by the server' });
+    }
+  }),
+  experienceSwitchResponseSchema: roomPayloadSchema.extend({
+    requestId: z.string().uuid(),
+    accept: z.boolean()
+  }),
   readyPayloadSchema: roomPayloadSchema.extend({ ready: z.boolean() }),
   answerPayloadSchema: roomPayloadSchema.extend({
     answer: z.string().min(1).max(280),

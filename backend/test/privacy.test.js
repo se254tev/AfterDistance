@@ -92,10 +92,10 @@ const { server } = require('../src/server');
 const persistence = require('../src/persistence');
 let origin;
 
-function request(path, body) {
+function request(path, body, extraHeaders = {}) {
   return fetch(origin + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify(body)
   });
 }
@@ -112,6 +112,20 @@ test('HTTP deletion endpoints authenticate session ownership, preserve a partner
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
   try {
+    const idempotencyKey = '1c667721-63b2-4e49-988e-6068c5982468';
+    const firstCreation = await request('/api/rooms', { nickname: 'Retry-safe host' }, {
+      'Idempotency-Key': idempotencyKey
+    });
+    const firstRoom = await firstCreation.json();
+    const retriedCreation = await request('/api/rooms', { nickname: 'Retry-safe host' }, {
+      'Idempotency-Key': idempotencyKey
+    });
+    const retriedRoom = await retriedCreation.json();
+    assert.equal(firstCreation.status, 201);
+    assert.equal(retriedCreation.status, 200);
+    assert.equal(retriedRoom.roomCode, firstRoom.roomCode);
+    assert.equal(retriedRoom.sessionId, firstRoom.sessionId);
+
     const host = await createRoom();
     const joinedResponse = await request('/api/rooms/join', {
       nickname: 'Test partner',

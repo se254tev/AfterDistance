@@ -13,15 +13,46 @@ const {
   roomPayloadSchema,
   answerPayloadSchema,
   gameConfigSchema,
+  experienceSwitchRequestSchema,
   canJoinRoom,
   createSocketEventRateLimiter
 } = require('../src/socket-validation');
 const persistence = require('../src/persistence');
+const { GameResult } = require('../src/models');
 const { questionBank, getOptions, localize } = require('../src/game/content');
 
 test('the game contains exactly five rounds', () => {
   assert.equal(scenarios.length, 5);
-  assert.equal(createGame('ABCDEF').rounds.length, 5);
+  const first = createGame('ABCDEF');
+  const second = createGame('ABCDEF');
+  assert.equal(first.rounds.length, 5);
+  assert.notEqual(first.gameId, second.gameId);
+});
+
+test('completed results expose both players’ round results without exposing session identifiers', () => {
+  const game = createGame('ABCDEF');
+  const firstSession = 'first-player-private-session';
+  const secondSession = 'second-player-private-session';
+  game.currentPhase = 'COMPLETED';
+  game.playerStates = {
+    [firstSession]: { sessionId: firstSession, seat: 0, achievements: [] },
+    [secondSession]: { sessionId: secondSession, seat: 1, achievements: [] }
+  };
+  game.scores = { [firstSession]: 7, [secondSession]: 4 };
+  game.roundResults = [{
+    round: 1,
+    answers: { [firstSession]: 'answer one', [secondSession]: 'answer two' },
+    predictions: { [firstSession]: 'prediction one', [secondSession]: 'prediction two' },
+    scores: { [firstSession]: 2, [secondSession]: 1 },
+    answerStyles: {},
+    explanation: 'A shared result'
+  }];
+  const view = publicGame(game, firstSession);
+  assert.equal(view.scores.you, 7);
+  assert.equal(view.completedResults[0].yourAnswer, 'answer one');
+  assert.equal(view.completedResults[0].partnerAnswer, 'answer two');
+  assert.equal(JSON.stringify(view).includes(firstSession), false);
+  assert.equal(JSON.stringify(view).includes(secondSession), false);
 });
 
 test('all four Kenyan modes select five unique questions from the requested mode', () => {
@@ -317,6 +348,43 @@ test('socket room and answer payloads reject malformed input', () => {
   assert.equal(roomPayloadSchema.safeParse({ roomCode: 'short', sessionId: 'x' }).success, false);
   assert.equal(roomPayloadSchema.safeParse({ roomCode: 'ABCDEF123456', sessionId: 'x'.repeat(32) }).success, true);
   assert.equal(answerPayloadSchema.safeParse({ roomCode: 'ABCDEF123456', sessionId: 'x'.repeat(32), answer: 42 }).success, false);
+  const switchRequest = {
+    roomCode: 'ABCDEF123456',
+    sessionId: 'x'.repeat(32),
+    kind: 'switch',
+    config: { experience: 'classic', mode: 'classic', category: 'classic', pack: 'mixed', language: 'english', timerSeconds: 0 }
+  };
+  assert.equal(experienceSwitchRequestSchema.safeParse(switchRequest).success, true);
+  assert.equal(experienceSwitchRequestSchema.safeParse({
+    roomCode: switchRequest.roomCode,
+    sessionId: switchRequest.sessionId,
+    kind: 'switch'
+  }).success, false);
+  assert.equal(experienceSwitchRequestSchema.safeParse({
+    roomCode: switchRequest.roomCode,
+    sessionId: switchRequest.sessionId,
+    kind: 'replay'
+  }).success, true);
+});
+
+test('experience catalog reports only implemented experiences as available', () => {
+  const options = getOptions();
+  assert.ok(options.experiences.length > 0);
+  assert.ok(options.experiences.every(experience =>
+    typeof experience.description === 'string'
+    && typeof experience.category === 'string'
+    && Array.isArray(experience.modes)
+    && Array.isArray(experience.languages)
+    && experience.available === true
+  ));
+});
+
+test('completed results are uniquely keyed by game session, not by room', () => {
+  const indexes = GameResult.schema.indexes();
+  assert.ok(indexes.some(([keys, options]) =>
+    keys.gameId === 1 && options.unique && options.sparse
+  ));
+  assert.equal(indexes.some(([keys, options]) => keys.roomCode === 1 && options.unique), false);
 });
 
 test('production MongoDB URI is required', async () => {

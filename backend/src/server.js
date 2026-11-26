@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -63,6 +63,7 @@ const io = new Server(server, {
 
 const rooms = new Map();
 const sessions = new Map();
+const roomCreationRequests = new Map();
 const deletingSessions = new Set();
 const deletedSessionHashes = new Set();
 const deletingRooms = new Set();
@@ -84,6 +85,8 @@ function code() {
 const {
   roomPayloadSchema,
   gameConfigPayloadSchema,
+  experienceSwitchRequestSchema,
+  experienceSwitchResponseSchema,
   readyPayloadSchema,
   answerPayloadSchema,
   predictionPayloadSchema,
@@ -104,6 +107,13 @@ function publicRoom(room) {
 }
 function roomView(room, sessionId) {
   const view = publicRoom(room);
+  view.switchRequest = room.switchRequest ? {
+    requestId: room.switchRequest.requestId,
+    config: room.switchRequest.config,
+    kind: room.switchRequest.kind,
+    requestedBy: room.players.find(player => player.sessionId === room.switchRequest.requestedBy)?.nickname || 'Your partner',
+    requestedByMe: room.switchRequest.requestedBy === sessionId
+  } : null;
   view.me = room.players.find(p => p.sessionId === sessionId) || null;
   if (view.me) view.me = { nickname: view.me.nickname, ready: view.me.ready, online: view.me.online };
   const partner = room.players.find(p => p.sessionId !== sessionId) || null;
@@ -125,27 +135,36 @@ function broadcastRoom(room) {
   }
 }
 
-function persistRoom(room, allowBlockedRoom = false) {
-  if ((!allowBlockedRoom && deletingRooms.has(room.code))
+function persistGameResult(room, requirePersistence = false) {
+  if ((isProduction || requirePersistence) && (isProduction || process.env.MONGODB_URI)
+      && !persistence.isConnected()) {
+    return Promise.reject(new Error('MongoDB persistence is unavailable'));
+  }
+  if (deletingRooms.has(room.code)
       || room.players.some(player => deletingSessions.has(player.sessionId)
         || deletedSessionHashes.has(persistence.hashSessionId(player.sessionId)))) {
     return Promise.resolve();
   }
-  function persistGameResult(room) {
-    if (deletingRooms.has(room.code)
-        || room.players.some(player => deletingSessions.has(player.sessionId)
-          || deletedSessionHashes.has(persistence.hashSessionId(player.sessionId)))) {
-      return Promise.resolve();
-    }
-    const write = persistence.saveGameResult(room).catch(error => {
-      console.error(`Failed to persist game result: ${error.name || 'database error'}`);
-      if (isProduction) throw error;
-    });
-    gameResultWrites.set(room.code, write);
-    write.finally(() => {
-      if (gameResultWrites.get(room.code) === write) gameResultWrites.delete(room.code);
-    }).catch(() => {});
-    return write;
+  const write = persistence.saveGameResult(room).catch(error => {
+    console.error(`Failed to persist game result: ${error.name || 'database error'}`);
+    if (isProduction || requirePersistence) throw error;
+  });
+  gameResultWrites.set(room.code, write);
+  write.finally(() => {
+    if (gameResultWrites.get(room.code) === write) gameResultWrites.delete(room.code);
+  }).catch(() => {});
+  return write;
+}
+
+function persistRoom(room, allowBlockedRoom = false, requirePersistence = false) {
+  if ((isProduction || requirePersistence) && (isProduction || process.env.MONGODB_URI)
+      && !persistence.isConnected()) {
+    return Promise.reject(new Error('MongoDB persistence is unavailable'));
+  }
+  if ((!allowBlockedRoom && deletingRooms.has(room.code))
+      || room.players.some(player => deletingSessions.has(player.sessionId)
+        || deletedSessionHashes.has(persistence.hashSessionId(player.sessionId)))) {
+    return Promise.resolve();
   }
   const previous = persistenceQueues.get(room.code) || Promise.resolve();
   const current = previous
@@ -153,7 +172,7 @@ function persistRoom(room, allowBlockedRoom = false) {
     .then(() => persistence.saveRoom(room))
     .catch(error => {
       console.error(`Failed to persist room ${room.code}: ${error.name || 'database error'}`);
-      if (isProduction) throw error;
+      if (isProduction || requirePersistence) throw error;
     });
   persistenceQueues.set(room.code, current);
   current.finally(() => {
@@ -164,7 +183,7 @@ function persistRoom(room, allowBlockedRoom = false) {
 function persistGuest(sessionId, nickname, roomCode) {
   return persistence.saveGuestSession(sessionId, nickname, roomCode).catch(error => {
     console.error(`Failed to persist guest session: ${error.name || 'database error'}`);
-    if (isProduction) throw error;
+    if (isProduction || requirePersistence) throw error;
   });
 }
 function findActiveRoom(roomCode) {
@@ -315,6 +334,21 @@ function expirePhaseIfDue(room) {
   return false;
 }
 
+function createPlayerStates(room) {
+  return Object.fromEntries(room.players.map((player, seat) => [player.sessionId, {
+    sessionId: player.sessionId,
+    seat,
+    answerSubmitted: false,
+    predictionSubmitted: false,
+    answer: null,
+    answerStyle: null,
+    answerIndex: null,
+    prediction: null,
+    achievements: [],
+    achievementProgress: { correctPredictions: 0, actionTags: {}, nairobiRounds: 0 }
+  }]));
+}
+
 app.get('/api/health', (_, res) => res.json({
   ok: true,
   persistence: isProduction ? (persistence.isConnected() ? 'connected' : 'disconnected') : 'optional'
@@ -322,6 +356,63 @@ app.get('/api/health', (_, res) => res.json({
 app.post('/api/rooms', async (req, res) => {
   const parsed = z.object({ nickname: z.string().trim().min(2).max(24) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter a nickname from 2 to 24 characters.' });
+  const requestId = req.get('Idempotency-Key');
+  if (requestId && !z.string().uuid().safeParse(requestId).success) {
+    return res.status(400).json({ error: 'Invalid room creation request key.' });
+  }
+  if (requestId && roomCreationRequests.has(requestId)) {
+    const saved = await roomCreationRequests.get(requestId);
+    if (!findActiveRoom(saved.room.code)) {
+      return res.status(410).json({ error: 'The room created for this request has expired.' });
+    }
+    return res.status(200).json({
+      roomCode: saved.room.code,
+      sessionId: saved.sessionId,
+      room: roomView(saved.room, saved.sessionId),
+      inviteUrl: `/join/${saved.room.code}`
+    });
+  }
+  let resolveRoomCreation;
+  let rejectRoomCreation;
+  if (requestId) {
+    const pending = new Promise((resolve, reject) => {
+      resolveRoomCreation = resolve;
+      rejectRoomCreation = reject;
+    });
+    pending.catch(() => {});
+    roomCreationRequests.set(requestId, pending);
+  }
+  if (requestId) {
+    try {
+      const savedRoom = await persistence.getRoomByCreateRequest(requestId);
+      if (savedRoom) {
+        let activeRoom = rooms.get(savedRoom.code);
+        if (!activeRoom && new Date(savedRoom.expiresAt).getTime() > Date.now()) {
+          savedRoom.players.forEach(player => { player.online = false; });
+          activeRoom = savedRoom;
+          rooms.set(savedRoom.code, savedRoom);
+          savedRoom.players.forEach(player => {
+            sessions.set(player.sessionId, { roomCode: savedRoom.code, nickname: player.nickname });
+          });
+        }
+        if (activeRoom) {
+          const sessionId = savedRoom.hostSessionId;
+          resolveRoomCreation({ room: activeRoom, sessionId });
+          return res.status(200).json({
+            roomCode: activeRoom.code,
+            sessionId,
+            room: roomView(activeRoom, sessionId),
+            inviteUrl: `/join/${activeRoom.code}`
+          });
+        }
+      }
+    } catch (error) {
+      rejectRoomCreation?.(error);
+      roomCreationRequests.delete(requestId);
+      console.error(`Failed to verify room creation: ${error.name || 'database error'}`);
+      return res.status(503).json({ error: 'The room creation status could not be verified.' });
+    }
+  }
   const roomCode = code();
   const sessionId = createToken();
   const room = {
@@ -329,7 +420,8 @@ app.post('/api/rooms', async (req, res) => {
     createdAt: Date.now(), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     players: [{ sessionId, nickname: parsed.data.nickname, ready: false, online: true }],
     gameConfig: null,
-    game: null
+    game: null,
+    ...(requestId ? { createRequestId: requestId } : {})
   };
   rooms.set(roomCode, room); sessions.set(sessionId, { roomCode, nickname: parsed.data.nickname });
   try {
@@ -343,8 +435,11 @@ app.post('/api/rooms', async (req, res) => {
   } catch (error) {
     rooms.delete(roomCode);
     sessions.delete(sessionId);
+    rejectRoomCreation?.(error);
+    if (requestId) roomCreationRequests.delete(requestId);
     return res.status(503).json({ error: 'The room could not be saved. Please try again.' });
   }
+  resolveRoomCreation?.({ room, sessionId });
   res.status(201).json({ roomCode, sessionId, room: roomView(room, sessionId), inviteUrl: `/join/${roomCode}` });
 });
 app.post('/api/rooms/join', roomJoinLimit, async (req, res) => {
@@ -354,7 +449,18 @@ app.post('/api/rooms/join', roomJoinLimit, async (req, res) => {
   const room = findActiveRoom(roomCode);
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   if (!canJoinRoom(room)) return res.status(409).json({ error: 'This room is already full.' });
+  if (room.game?.currentPhase === 'COMPLETED') {
+    try {
+      await persistGameResult(room, true);
+    } catch (error) {
+      console.error(`Failed to preserve completed game before join: ${error.name || 'database error'}`);
+      return res.status(503).json({ error: 'The completed game could not be safely preserved. Please retry.' });
+    }
+  }
   const sessionId = createToken();
+  if (room.game?.currentPhase === 'COMPLETED') room.game = null;
+  room.switchRequest = null;
+  room.players = room.players.map(player => ({ ...player, ready: false }));
   room.players.push({ sessionId, nickname: parsed.data.nickname, ready: false, online: true });
   room.status = 'WAITING_FOR_READY';
   sessions.set(sessionId, { roomCode, nickname: parsed.data.nickname });
@@ -639,6 +745,7 @@ io.on('connection', socket => {
       if (!parsed.success) throw new Error('Invalid game configuration');
       const { room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
       if (room.game) throw new Error('Game settings cannot change after the game starts');
+      if (room.switchRequest) throw new Error('Wait for the pending experience request to finish first.');
       room.gameConfig = normalizeGameConfig(parsed.data.config);
       broadcastRoom(room);
       persistRoom(room);
@@ -646,14 +753,120 @@ io.on('connection', socket => {
     } catch (error) { ack(socket, callback, false, { error: error.message }); }
   });
 
-  socket.on('game:start', (payload, callback) => {
+  socket.on('experience:switch-request', async (payload, callback) => {
+    try {
+      if (!allowSocketEvent(socket)) throw new Error('Too many requests');
+      const parsed = experienceSwitchRequestSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('Invalid experience selection');
+      const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      if (room.players.length !== 2 || !room.game) throw new Error('Both players must join before changing experience.');
+      if (parsed.data.kind === 'replay' && room.game.currentPhase !== 'COMPLETED') {
+        throw new Error('Play Again is available after both players complete the experience.');
+      }
+      const config = parsed.data.kind === 'replay'
+        ? room.game.config
+        : normalizeGameConfig(parsed.data.config);
+      if (room.switchRequest) {
+        const existing = room.switchRequest;
+        if (existing.requestedBy === member.sessionId
+            && existing.kind === parsed.data.kind
+            && JSON.stringify(existing.config) === JSON.stringify(config)) {
+          ack(socket, callback, true, { requestId: existing.requestId });
+          return;
+        }
+        throw new Error('Another experience request is waiting for your partner.');
+      }
+      room.switchRequest = {
+        requestId: randomUUID(),
+        requestedBy: member.sessionId,
+        kind: parsed.data.kind,
+        config,
+        requestedAt: new Date().toISOString()
+      };
+      try {
+        await persistRoom(room, false, true);
+      } catch {
+        room.switchRequest = null;
+        throw new Error('Could not save your request. The current experience is unchanged.');
+      }
+      broadcastRoom(room);
+      ack(socket, callback, true, { requestId: room.switchRequest.requestId });
+    } catch (error) {
+      ack(socket, callback, false, { error: error.message });
+    }
+  });
+
+  socket.on('experience:switch-response', async (payload, callback) => {
+    try {
+      if (!allowSocketEvent(socket)) throw new Error('Too many requests');
+      const parsed = experienceSwitchResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('Invalid experience response');
+      const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      const request = room.switchRequest;
+      if (!request || request.requestId !== parsed.data.requestId) throw new Error('This request is no longer available.');
+      if (request.requestedBy === member.sessionId) throw new Error('The other player must approve the change.');
+      if (!parsed.data.accept) {
+        room.switchRequest = null;
+        try {
+          await persistRoom(room, false, true);
+        } catch {
+          room.switchRequest = request;
+          throw new Error('Could not save your response. Please retry.');
+        }
+        broadcastRoom(room);
+        io.to(room.code).emit('experience:switch-declined');
+        ack(socket, callback, true, {});
+        return;
+      }
+      if (room.players.length !== 2 || !room.players.every(player => player.online)) {
+        throw new Error('Both players must be connected to approve the change.');
+      }
+      if (room.game.currentPhase === 'COMPLETED') await persistGameResult(room, true);
+      const oldGame = room.game;
+      const previous = {
+        gameConfig: room.gameConfig,
+        previousQuestionIds: room.previousQuestionIds,
+        switchRequest: room.switchRequest,
+        status: room.status,
+        players: room.players
+      };
+      clearGameTimer(room.code);
+      room.game = null;
+      room.gameConfig = request.config;
+      room.previousQuestionIds = request.kind === 'replay' ? oldGame.usedQuestionIds || [] : [];
+      room.switchRequest = null;
+      room.status = 'WAITING_FOR_READY';
+      room.players = room.players.map(player => ({ ...player, ready: false }));
+      try {
+        await persistRoom(room, false, true);
+      } catch {
+        room.game = oldGame;
+        Object.assign(room, previous);
+        if (oldGame.currentPhase !== 'COMPLETED') scheduleGameTimer(room);
+        throw new Error('Could not save the new experience. Your current session is unchanged.');
+      }
+      broadcastRoom(room);
+      io.to(room.code).emit('experience:switched');
+      ack(socket, callback, true, {});
+    } catch (error) {
+      ack(socket, callback, false, { error: error.message });
+    }
+  });
+
+  socket.on('game:start', async (payload, callback) => {
+    let room;
+    let oldGame;
+    let oldStatus;
     try {
       if (!allowSocketEvent(socket)) throw new Error('Too many requests');
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid game start request');
-      const { room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      ({ room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode));
       if (room.game) throw new Error('The game has already started');
+      if (room.switchRequest) throw new Error('Wait for the pending experience request to finish first.');
       if (room.players.length !== 2 || !room.players.every(p => p.ready && p.online)) throw new Error('Both players must be ready and online');
+      oldGame = room.game;
+      oldStatus = room.status;
       room.game = createGame(room.code, room.gameConfig || undefined);
       room.game.currentPhase = 'ANSWERING';
       room.status = 'PLAYING';
@@ -670,11 +883,19 @@ io.on('connection', socket => {
         achievementProgress: { correctPredictions: 0, actionTags: {}, nairobiRounds: 0 }
       }]));
       room.game.scores = Object.fromEntries(room.players.map(p => [p.sessionId, 0]));
+      room.game.participants = room.players.map(({ sessionId, nickname }) => ({ sessionId, nickname }));
       startPhaseTimer(room.game);
       scheduleGameTimer(room);
+      try {
+        await persistRoom(room, false, true);
+      } catch {
+        clearGameTimer(room.code);
+        room.game = oldGame;
+        room.status = oldStatus;
+        throw new Error('The new game session could not be saved. Please try again.');
+      }
       broadcastRoom(room);
       io.to(room.code).emit('game:started', { roomCode: room.code, timestamp: Date.now() });
-      persistRoom(room);
       ack(socket, callback, true, {});
     } catch (error) { ack(socket, callback, false, { error: error.message }); }
   });
@@ -781,34 +1002,8 @@ io.on('connection', socket => {
       if (!allowSocketEvent(socket)) throw new Error('Too many requests');
       const parsed = roomPayloadSchema.safeParse(payload);
       if (!parsed.success) throw new Error('Invalid replay request');
-      const { room } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
-      if (!room.game || room.game.currentPhase !== 'COMPLETED') throw new Error('Replay is available after the game completes');
-      clearGameTimer(room.code);
-      const replayConfig = room.game.config;
-      const previousQuestionIds = room.game.usedQuestionIds || [];
-      room.game = createGame(room.code, replayConfig, previousQuestionIds);
-      room.gameConfig = room.game.config;
-      room.status = 'PLAYING';
-      room.game.currentPhase = 'ANSWERING';
-      room.game.playerStates = Object.fromEntries(room.players.map((p, seat) => [p.sessionId, {
-        sessionId: p.sessionId,
-        seat,
-        answerSubmitted: false,
-        predictionSubmitted: false,
-        answer: null,
-        answerStyle: null,
-        answerIndex: null,
-        prediction: null,
-        achievements: [],
-        achievementProgress: { correctPredictions: 0, actionTags: {}, nairobiRounds: 0 }
-      }]));
-      room.game.scores = Object.fromEntries(room.players.map(p => [p.sessionId, 0]));
-      room.players.forEach(p => { p.ready = true; });
-      startPhaseTimer(room.game);
-      scheduleGameTimer(room);
-      broadcastRoom(room); io.to(room.code).emit('game:replayed', { timestamp: Date.now() });
-      persistRoom(room);
-      ack(socket, callback, true, {});
+      validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      throw new Error('Play Again requires both players to approve through the experience request.');
     } catch (error) { ack(socket, callback, false, { error: error.message }); }
   });
 
@@ -856,6 +1051,43 @@ io.on('connection', socket => {
       });
     } catch (error) { ack(socket, callback, false, { error: error.message }); }
   });
+  socket.on('experience:leave', async (payload, callback) => {
+    try {
+      if (!allowSocketEvent(socket)) throw new Error('Too many requests');
+      const parsed = roomPayloadSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('Invalid leave request');
+      const { room, member } = validateSocket(socket, parsed.data.sessionId, parsed.data.roomCode);
+      if (room.game?.currentPhase === 'COMPLETED') await persistGameResult(room, true);
+      const previous = {
+        players: room.players,
+        game: room.game,
+        status: room.status,
+        switchRequest: room.switchRequest
+      };
+      clearGameTimer(room.code);
+      room.players = room.players.filter(player => player.sessionId !== member.sessionId);
+      room.switchRequest = null;
+      if (room.game?.currentPhase !== 'COMPLETED') {
+        room.game = null;
+        room.status = 'WAITING_FOR_PLAYER';
+        room.players = room.players.map(player => ({ ...player, ready: false }));
+      }
+      try {
+        await persistRoom(room, false, true);
+      } catch {
+        Object.assign(room, previous);
+        if (room.game && room.game.currentPhase !== 'COMPLETED') scheduleGameTimer(room);
+        throw new Error('Could not save your departure. Your current session is unchanged.');
+      }
+      sessions.delete(member.sessionId);
+      ack(socket, callback, true, {});
+      disconnectSession(member.sessionId, 'experience:left');
+      io.to(room.code).emit('player:left', { nickname: member.nickname });
+      broadcastRoom(room);
+    } catch (error) {
+      ack(socket, callback, false, { error: error.message });
+    }
+  });
   socket.on('disconnect', () => {
     const sessionId = socketToSession.get(socket.id);
     socketToSession.delete(socket.id);
@@ -886,6 +1118,7 @@ async function start() {
   }
 
   if (persistence.isConnected()) {
+    await persistence.migrateGameResultIndexes();
     await persistence.reconcileDeletionRecords();
     const deletionHashes = await persistence.listDeletionHashes();
     deletionHashes.forEach(hash => deletedSessionHashes.add(hash));

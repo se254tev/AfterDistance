@@ -1,4 +1,5 @@
 const SESSION_KEY = 'ad-session';
+const ROOM_CREATION_KEY = 'ad-room-creation-request';
 
 export function getStoredSession(storage) {
   try {
@@ -38,4 +39,29 @@ export function clearStoredSession(storage) {
     return false;
   }
   return true;
+}
+
+export function getRoomCreationRequestId(storage) {
+  try {
+    const target = storage || globalThis.sessionStorage;
+    if (!target) return '';
+    let requestId = target.getItem(ROOM_CREATION_KEY);
+    if (!requestId) {
+      requestId = globalThis.crypto?.randomUUID?.();
+      if (!requestId) return '';
+      target.setItem(ROOM_CREATION_KEY, requestId);
+    }
+    return requestId;
+  } catch {
+    return '';
+  }
+}
+
+export function clearRoomCreationRequestId(storage) {
+  try {
+    (storage || globalThis.sessionStorage)?.removeItem(ROOM_CREATION_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }

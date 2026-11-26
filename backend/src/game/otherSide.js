@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const {
   ACHIEVEMENTS,
   createRounds,
@@ -93,6 +94,7 @@ function createGame(roomId, configInput, previousQuestionIds = [], random = Math
   const config = normalizeGameConfig(configInput);
   const rounds = createRounds(scenarios, config, previousQuestionIds, random);
   return {
+    gameId: randomUUID(),
     roomId,
     gameType: config.experience === 'classic' ? 'other-side' : 'kenyan-comedy',
     config,
@@ -152,6 +154,7 @@ function publicGame(game, sessionId) {
   } : null;
 
   return {
+    gameId: game.gameId,
     gameType: game.gameType,
     config: game.config,
     currentRound: game.currentRound + 1,
@@ -180,6 +183,22 @@ function publicGame(game, sessionId) {
       partner: game.scores[partnerState.sessionId] || 0
     } : null,
     roundResults,
+    completedResults: game.currentPhase === 'COMPLETED' && ownState && partnerState
+      ? game.roundResults.map(result => ({
+        round: result.round,
+        yourAnswer: result.answers[sessionId],
+        partnerAnswer: result.answers[partnerState.sessionId],
+        yourPrediction: result.predictions[sessionId],
+        partnerPrediction: result.predictions[partnerState.sessionId],
+        yourPoints: result.scores[sessionId] || 0,
+        partnerPoints: result.scores[partnerState.sessionId] || 0,
+        explanation: result.explanation,
+        message: result.message,
+        correctAnswer: result.correctAnswer,
+        yourAnswerStyle: result.answerStyles?.[sessionId] || null,
+        partnerAnswerStyle: result.answerStyles?.[partnerState.sessionId] || null
+      }))
+      : [],
     completedAt: game.completedAt
   };
 }

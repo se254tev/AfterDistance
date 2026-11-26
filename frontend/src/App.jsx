@@ -3,7 +3,13 @@ import { io } from 'socket.io-client';
 import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import './App.css';
 import { copyInvitationText, getInvitationLink, getWhatsAppShareUrl } from './invitations.js';
-import { clearStoredSession, getStoredSession, saveStoredSession } from './session.js';
+import {
+  clearRoomCreationRequestId,
+  clearStoredSession,
+  getRoomCreationRequestId,
+  getStoredSession,
+  saveStoredSession
+} from './session.js';
 import { CentreRoute } from './HelpLegal.jsx';
 
 const API = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
@@ -91,6 +97,53 @@ function GameSetup({ options, config, onChange }) {
     </div>
     <p>Both players use the same questions, language, and timer.</p>
   </div>;
+}
+
+function ExperienceSelection({ room, config, onChange, onSelectExperience, onRequestSwitch }) {
+  const options = room.gameOptions || {};
+  const names = new Map((options.modes || []).map(item => [item.id, item.label]));
+  const languages = new Map((options.languages || []).map(item => [item.id, item.label]));
+  const currentExperience = room.game?.config?.experience;
+  return <section className="experience-selection">
+    <p className="eyebrow">YOUR NEXT SHARED STORY</p>
+    <h2>Choose an Experience</h2>
+    <p className="experience-intro">Both players must agree before the current session changes. Each available experience starts as a fresh five-round game.</p>
+    <div className="experience-cards">
+      {options.experiences?.map(experience => <article
+        className={`experience-card ${config.experience === experience.id ? 'selected' : ''}`}
+        key={experience.id}
+      >
+        <div className="experience-card-heading">
+          <h3>{experience.label}</h3>
+          <span className={experience.available ? 'availability available' : 'availability'}>
+            {experience.available ? 'Available' : 'Coming soon'}
+          </span>
+        </div>
+        <p>{experience.description}</p>
+        <dl>
+          <div><dt>Category</dt><dd>{experience.category}</dd></div>
+          <div><dt>Modes</dt><dd>{experience.modes.map(id => names.get(id) || id).join(' · ')}</dd></div>
+          <div><dt>Languages</dt><dd>{experience.languages.map(id => languages.get(id) || id).join(' · ')}</dd></div>
+        </dl>
+        <button
+          className="button ghost"
+          disabled={!experience.available}
+          aria-pressed={config.experience === experience.id}
+          onClick={() => onSelectExperience(experience.id)}
+        >{config.experience === experience.id ? 'Selected' : 'Select Experience'}</button>
+        {currentExperience === experience.id && <small className="current-experience">Current experience</small>}
+      </article>)}
+    </div>
+    {config.experience === 'kenyan' && <GameSetup options={options} config={config} onChange={onChange} />}
+    <div className="experience-actions">
+      <button className="button primary" disabled={!room.partner || !options.experiences?.find(item => item.id === config.experience)?.available || Boolean(room.switchRequest)} onClick={onRequestSwitch}>
+        Request Experience Switch
+      </button>
+      <Link className="button ghost" to={`/room/${room.roomCode}`}>Continue Current Experience</Link>
+    </div>
+    {!room.partner && <p className="experience-status">Invite your partner before requesting an experience change.</p>}
+    {room.partner && !room.partner.online && <p className="experience-status">Your partner is disconnected. You can save a request, but they must reconnect before approving.</p>}
+  </section>;
 }
 
 function Stars() {
@@ -227,12 +280,17 @@ function Entry({ mode }) {
     try {
       const endpoint = mode === 'create' ? '/api/rooms' : '/api/rooms/join';
       const body = mode === 'create' ? { nickname } : { nickname, roomCode: code };
-      const response = await fetch(API + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const requestId = mode === 'create' ? getRoomCreationRequestId() : '';
+      if (mode === 'create' && !requestId) throw new Error('Room creation could not be made retry-safe in this browser. Check session storage permissions and try again.');
+      const headers = { 'Content-Type': 'application/json' };
+      if (requestId) headers['Idempotency-Key'] = requestId;
+      const response = await fetch(API + endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not enter the room.');
       if (!saveStoredSession({ sessionId: data.sessionId, roomCode: data.roomCode, nickname })) {
         throw new Error('Your session could not be saved in this browser. Check storage permissions and try again.');
       }
+      if (requestId) clearRoomCreationRequestId();
       navigate(`/room/${data.roomCode}`);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }
@@ -252,6 +310,8 @@ function Entry({ mode }) {
 function RoomPage() {
   const { code } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const exploring = location.pathname.startsWith('/experiences/');
   const [room, setRoom] = useState(null);
   const [status, setStatus] = useState('Connecting...');
   const [recoveryError, setRecoveryError] = useState('');
@@ -261,9 +321,12 @@ function RoomPage() {
   const [socketError, setSocketError] = useState('');
   const [invitationFeedback, setInvitationFeedback] = useState('');
   const [configDraft, setConfigDraft] = useState(DEFAULT_GAME_CONFIG);
+  const [hasSelectedExperience, setHasSelectedExperience] = useState(false);
   const [serverOffset, setServerOffset] = useState(0);
   const [clockNow, setClockNow] = useState(Date.now());
   const [exitAction, setExitAction] = useState(null);
+  const [confirmSwitch, setConfirmSwitch] = useState(false);
+  const [switchNotice, setSwitchNotice] = useState('');
   const stored = getStoredSession();
   const sessionId = stored.sessionId;
   const roomCode = stored.roomCode;
@@ -309,6 +372,10 @@ function RoomPage() {
       navigate('/', { replace: true, state: { privacyNotice: 'The room creator deleted this shared game. Your saved room credentials were cleared.' } });
     });
     socket.on('connection:restored', () => setStatus('Your partner has reconnected'));
+    socket.on('experience:switched', () => {
+      setSwitchNotice('Your new experience is ready. Both players must choose I’m ready to start the fresh session.');
+      navigate(`/room/${roomCode}`, { replace: true });
+    });
     socket.on('error:occurred', payload => setSocketError(payload?.error || 'A connection error occurred.'));
     window.adSocket = socket;
     return () => {
@@ -317,9 +384,13 @@ function RoomPage() {
     };
   }, [code, navigate, roomCode, sessionId, sessionMatchesRoom]);
   useEffect(() => {
+    if (room?.game) {
+      if (!hasSelectedExperience) setConfigDraft(room.game.config);
+      return;
+    }
     if (room?.gameConfig) setConfigDraft(room.gameConfig);
-    else if (!room?.game) setConfigDraft(DEFAULT_GAME_CONFIG);
-  }, [room?.gameConfig, room?.game]);
+    else setConfigDraft(DEFAULT_GAME_CONFIG);
+  }, [hasSelectedExperience, room?.gameConfig, room?.game]);
   useEffect(() => { setAnswer(''); setAnswerStyle(''); setPrediction(''); }, [room?.game?.currentRound, room?.game?.currentPhase]);
   useEffect(() => {
     if (!room?.game?.deadlineAt) return undefined;
@@ -364,26 +435,74 @@ function RoomPage() {
     setExitAction('home');
   }
   function leaveGame() {
-    setExitAction('leave');
+    setExitAction('leave-experience');
   }
   function confirmExit() {
     if (exitAction === 'home') {
       navigate('/');
       return;
     }
-    if (exitAction === 'leave') {
-      window.adSocket?.emit('room:leave', { roomCode: stored.roomCode, sessionId: stored.sessionId }, result => {
-        if (result?.ok) navigate('/');
-        else setSocketError(result?.error || 'Could not leave the game.');
+    if (exitAction === 'leave-experience') {
+      const socket = window.adSocket;
+      if (!socket?.connected) {
+        setSocketError('Reconnect before leaving so your departure can be saved.');
+        return;
+      }
+      socket.emit('experience:leave', { roomCode: stored.roomCode, sessionId: stored.sessionId }, result => {
+        if (result?.ok) {
+          clearStoredSession();
+          navigate('/', { replace: true });
+        } else setSocketError(result?.error || 'Could not leave the experience.');
       });
     }
+  }
+  function sendSwitchRequest(kind, config) {
+    setSocketError('');
+    setSwitchNotice('');
+    const socket = window.adSocket;
+    if (!socket?.connected) {
+      setSocketError('Reconnect before requesting an experience change.');
+      return;
+    }
+    socket.emit(
+      'experience:switch-request',
+      { roomCode: stored.roomCode, sessionId: stored.sessionId, kind, ...(config ? { config } : {}) },
+      result => {
+        if (result?.ok) setSwitchNotice('Request sent. The new experience will begin after your partner approves and both players are ready.');
+        else setSocketError(result?.error || 'The experience request could not be saved.');
+      }
+    );
+  }
+  function respondToSwitch(accept) {
+    if (!room?.switchRequest) return;
+    const socket = window.adSocket;
+    if (!socket?.connected) {
+      setSocketError('Reconnect before responding to the experience request.');
+      return;
+    }
+    socket.emit(
+      'experience:switch-response',
+      {
+        roomCode: stored.roomCode,
+        sessionId: stored.sessionId,
+        requestId: room.switchRequest.requestId,
+        accept
+      },
+      result => {
+        if (result?.ok) setSwitchNotice(accept
+          ? 'You both approved. Choose Continue Current Experience to ready up for the new session.'
+          : 'You declined the experience request. Your current session is unchanged.');
+        else setSocketError(result?.error || 'Your response could not be saved.');
+      }
+    );
   }
 
   return <Shell><section className="room-layout">
     <aside><p className="eyebrow">SHARED ROOM</p><div className="room-code"><h3>{stored.roomCode}</h3><button className="copy" onClick={() => copyInvitation(stored.roomCode, 'Room code copied.')}>Copy Room Code</button></div>
       <div className="room-actions">
         <button className="button ghost" onClick={returnHome} aria-label="Return Home">Return Home</button>
-        <button className="text-button" onClick={leaveGame}>Leave Game</button>
+        {game && <Link className="text-button" to={`/experiences/${stored.roomCode}`}>Explore Other Experiences</Link>}
+        <button className="text-button" onClick={leaveGame}>Leave Experience</button>
         <Link className="text-button" to="/privacy">Privacy &amp; Data Management</Link>
       </div>
       <div className="player-card"><span className="avatar">{me?.nickname?.[0]}</span><div><b>{me?.nickname}</b><small>{me?.online ? 'You · Online' : 'Offline'}</small></div></div>
@@ -398,13 +517,49 @@ function RoomPage() {
     </aside>
     <div className="game-panel"><div className="connection"><i /> {status}</div>
       {socketError && <p className="error" role="alert">{socketError}</p>}
-      {!game ? <>
+      {switchNotice && <p className="switch-notice" role="status">{switchNotice}</p>}
+      {room.switchRequest && (room.switchRequest.requestedByMe
+        ? <p className="switch-notice" role="status">
+          Waiting for {partner?.nickname || 'your partner'} to approve {room.switchRequest.kind === 'replay' ? 'Play Again' : 'the new experience'}.
+          {partner && !partner.online ? ' They are offline; the request will remain pending until they reconnect.' : ''}
+        </p>
+        : <section className="switch-request" aria-label="Experience change request">
+          <h3>{room.switchRequest.requestedBy} wants to {room.switchRequest.kind === 'replay' ? 'play again' : `switch to ${room.gameOptions.experiences.find(item => item.id === room.switchRequest.config.experience)?.label || 'another experience'}`}.</h3>
+          <p>Nothing changes until you approve. Both players must be connected and ready before the new session starts.</p>
+          {partner && !partner.online && <p className="error">The requesting player is offline. Reconnect before approving.</p>}
+          <div className="switch-actions">
+            <button className="button ghost" onClick={() => respondToSwitch(false)}>Decline</button>
+            <button className="button primary" disabled={!partner?.online} onClick={() => respondToSwitch(true)}>Approve</button>
+          </div>
+        </section>)}
+      {exploring ? <ExperienceSelection
+        room={room}
+        config={configDraft}
+        onChange={setConfigDraft}
+        onSelectExperience={experience => {
+          setSocketError('');
+          setHasSelectedExperience(true);
+          const next = experience === 'kenyan'
+            ? { ...DEFAULT_GAME_CONFIG, experience, mode: 'comedy', category: 'mixed', language: 'mixed', timerSeconds: 15 }
+            : DEFAULT_GAME_CONFIG;
+          setConfigDraft(next);
+        }}
+        onRequestSwitch={() => game?.currentPhase === 'COMPLETED'
+          ? sendSwitchRequest('switch', configDraft)
+          : setConfirmSwitch(true)}
+      /> : !game ? <>
         <p className="eyebrow">CHOOSE YOUR FIRST MEMORY</p><h2>Ready when you both are.</h2>
         <GameSetup options={room.gameOptions} config={configDraft} onChange={configure} />
         <button className="game-card" onClick={() => emit('game:start', {})}><span className="game-icon">✦</span><div><b>{configDraft.experience === 'kenyan' ? 'Kenyan Comedy Experience' : 'The Other Side of Us'}</b><small>Five rounds · Shared questions · Your choices stay private</small></div><span>→</span></button>
         <button className={`button ${me.ready ? 'ghost' : 'primary'}`} onClick={ready}>{me.ready ? 'Unready' : 'I’m ready'}</button>
         {partner && partner.ready && <p className="partner-ready">Your partner is ready.</p>}
-      </> : game.currentPhase === 'COMPLETED' ? <Completed game={game} emit={emit} /> :
+      </> : game.currentPhase === 'COMPLETED' ? <Completed
+        game={game}
+        room={room}
+        onReplay={() => sendSwitchRequest('replay')}
+        onExplore={() => navigate(`/experiences/${stored.roomCode}`)}
+        onHome={() => navigate('/')}
+      /> :
       game.currentPhase === 'ROUND_RESULTS' ? <Results game={game} emit={emit} room={room} me={me} /> :
       <>
         <p className="eyebrow">{game.round?.isSurpriseRound ? 'SURPRISE ROUND · ' : ''}ROUND {game.currentRound} OF {game.totalRounds} · {game.round?.category}</p><h2>{game.round?.scenario}</h2>
@@ -433,15 +588,28 @@ function RoomPage() {
         {game.achievements?.length > 0 && <AchievementList achievements={game.achievements} />}
       </>}
     </div>
+    {confirmSwitch && <div className="dialog-backdrop">
+      <section className="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="switch-title">
+        <h2 id="switch-title">Request another experience?</h2>
+        <p>Your current active session will end only if your partner approves. Its unfinished progress will not become a completed result; completed game history remains saved. Your partner must be connected to approve, and both of you must ready up before a fresh session starts.</p>
+        <div className="dialog-actions">
+          <button className="button ghost" onClick={() => setConfirmSwitch(false)}>Continue Current Experience</button>
+          <button className="button primary" disabled={Boolean(room.switchRequest)} onClick={() => {
+            setConfirmSwitch(false);
+            sendSwitchRequest('switch', configDraft);
+          }}>Request Experience Switch</button>
+        </div>
+      </section>
+    </div>}
     {exitAction && <div className="dialog-backdrop">
       <section className="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="exit-title">
-        <h2 id="exit-title">{exitAction === 'home' ? 'Return to Home?' : 'Leave Game?'}</h2>
+        <h2 id="exit-title">{exitAction === 'home' ? 'Return to Home?' : 'Leave Experience?'}</h2>
         <p>{exitAction === 'home'
           ? 'Your game session will be preserved. You can return to this room later if it is still available.'
-          : 'You will appear offline to your partner. Your room and game progress will remain available until the room expires.'}</p>
+          : 'You will lose access to this room from this browser and cannot resume this player session. Your partner can continue or invite someone else. Completed results are retained; your partner’s independent data is not deleted.'}</p>
         <div className="dialog-actions">
-          <button className="button ghost" onClick={() => setExitAction(null)}>Continue Playing</button>
-          <button className="button primary" onClick={confirmExit}>{exitAction === 'home' ? 'Return Home' : 'Leave Game'}</button>
+          <button className="button ghost" onClick={() => setExitAction(null)}>Continue Current Experience</button>
+          <button className="button primary" onClick={confirmExit}>{exitAction === 'home' ? 'Return Home' : 'Leave Experience'}</button>
         </div>
       </section>
     </div>}
@@ -610,14 +778,29 @@ function Results({ game, emit, room }) {
     <AchievementList achievements={game.achievements} />
   </div>;
 }
-function Completed({ game, emit }) {
+function Completed({ game, room, onReplay, onExplore, onHome }) {
   const entries = [
     ['You', game.scores?.you || 0],
     ['Partner', game.scores?.partner || 0]
   ];
-  return <div className="results"><p className="eyebrow">YOUR SHARED STORY</p><h2>Game completed</h2><div className="score">{entries.map(([id, score]) => <div key={id}><b>{score}</b><small>Connection points</small></div>)}</div>
+  return <div className="results"><p className="eyebrow">YOUR SHARED STORY</p><h2>Game completed</h2>
+    <div className="score">{entries.map(([id, score]) => <div key={id}><b>{score}</b><small>{id} · Connection points</small></div>)}</div>
+    {game.completedResults?.length > 0 && <section className="completed-rounds" aria-label="Game results">
+      <h3>Game results</h3>
+      {game.completedResults.map(result => <article key={result.round}>
+        <b>Round {result.round}</b>
+        <p>You: {result.yourAnswer === null ? 'Time ran out' : choiceLabel(result.yourAnswer, room.players)}</p>
+        <p>Partner: {result.partnerAnswer === null ? 'Time ran out' : choiceLabel(result.partnerAnswer, room.players)}</p>
+        {result.explanation && <small>{result.explanation}</small>}
+      </article>)}
+    </section>}
     <AchievementList achievements={game.achievements} />
-    <button className="button primary" onClick={() => emit('game:replay', {})}>Play again</button></div>;
+    <div className="completed-actions">
+      <button className="button primary" onClick={onReplay}>Play Again</button>
+      <button className="button ghost" onClick={onExplore}>Explore Other Experiences</button>
+      <button className="text-button" onClick={onHome}>Return Home</button>
+    </div>
+  </div>;
 }
 
 export default function App() {
@@ -625,6 +808,7 @@ export default function App() {
     <Route path="/" element={<Landing />} /><Route path="/create" element={<Entry mode="create" />} />
     <Route path="/join" element={<Entry mode="join" />} /><Route path="/join/:code" element={<Entry mode="join" />} />
     <Route path="/room/:code" element={<RoomPage />} />
+    <Route path="/experiences/:code" element={<RoomPage />} />
     <Route path="/privacy" element={<PrivacyPage />} />
     <Route path="/help" element={<Shell><CentreRoute page="help" /></Shell>} />
     <Route path="/copyright" element={<Shell><CentreRoute page="copyright" /></Shell>} />

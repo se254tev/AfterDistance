@@ -114,6 +114,7 @@ async function saveRoom(room) {
       { roomCode: room.code },
       {
         roomCode: room.code,
+        createRequestId: room.createRequestId,
         hostSessionId: room.hostSessionId,
         players: room.players,
         roomStatus: room.status,
@@ -125,8 +126,9 @@ async function saveRoom(room) {
 
     if (room.game) {
       await GameSession.findOneAndUpdate(
-        { roomCode: room.code },
+        room.game.gameId ? { gameId: room.game.gameId } : { roomCode: room.code },
         {
+          gameId: room.game.gameId,
           roomCode: room.code,
           gameType: room.game.gameType,
           currentRound: room.game.currentRound,
@@ -144,11 +146,18 @@ async function saveRoom(room) {
         { upsert: true, setDefaultsOnInsert: true }
       );
     }
+
     lastWriteError = null;
   } catch (error) {
     lastWriteError = error;
     throw error;
   }
+}
+
+async function getRoomByCreateRequest(requestId) {
+  if (!isConnected()) return null;
+  const document = await GameRoom.findOne({ createRequestId: requestId }).select('state').lean();
+  return document?.state || null;
 }
 
 async function saveGameResult(room) {
@@ -167,15 +176,40 @@ async function saveGameResult(room) {
     }
   }
   await GameResult.findOneAndUpdate(
-    { roomCode: room.code },
+    room.game.gameId ? { gameId: room.game.gameId } : { roomCode: room.code },
     {
+      gameId: room.game.gameId,
       roomCode: room.code,
-      players: room.players.map(({ sessionId, nickname }) => ({ sessionId, nickname })),
+      players: room.game.participants || room.players.map(({ sessionId, nickname }) => ({ sessionId, nickname })),
       roundResults: room.game.roundResults,
       finalScores: room.game.scores,
       completedAt: room.game.completedAt ? new Date(room.game.completedAt) : new Date()
     },
     { upsert: true, setDefaultsOnInsert: true }
+  );
+}
+
+async function migrateGameResultIndexes() {
+  if (!isConnected()) return;
+  let indexes = [];
+  try {
+    indexes = await GameResult.collection.indexes();
+  } catch (error) {
+    if (error.codeName !== 'NamespaceNotFound') throw error;
+  }
+  for (const index of indexes) {
+    if (index.unique && index.key?.roomCode === 1) {
+      await GameResult.collection.dropIndex(index.name);
+    }
+  }
+  await GameResult.collection.createIndex(
+    { gameId: 1 },
+    { unique: true, sparse: true, name: 'gameId_unique_sparse' }
+  );
+  await GameResult.collection.createIndex({ roomCode: 1 }, { name: 'roomCode_1' });
+  await GameRoom.collection.createIndex(
+    { createRequestId: 1 },
+    { unique: true, sparse: true, name: 'createRequestId_unique_sparse' }
   );
 }
 
@@ -429,7 +463,9 @@ module.exports = {
   listDeletedRoomCodes,
   saveGuestSession,
   saveRoom,
+  getRoomByCreateRequest,
   saveGameResult,
+  migrateGameResultIndexes,
   deletePersonalData,
   deleteSharedRoom,
   reconcileDeletionRecords,

@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 
 const guestSessionSchema = new mongoose.Schema({
   sessionId: { type: String, required: true, unique: true, index: true },
@@ -9,14 +9,17 @@ const guestSessionSchema = new mongoose.Schema({
 
 const gameRoomSchema = new mongoose.Schema({
   roomCode: { type: String, required: true, unique: true, index: true },
+  createRequestId: { type: String },
   hostSessionId: String,
   players: [{ sessionId: String, nickname: String, ready: Boolean, online: Boolean }],
   roomStatus: String,
   expiresAt: { type: Date, required: true, index: true, expires: 0 },
   state: { type: mongoose.Schema.Types.Mixed, required: true }
 }, { timestamps: { createdAt: true, updatedAt: true } });
+gameRoomSchema.index({ createRequestId: 1 }, { unique: true, sparse: true, name: 'createRequestId_unique_sparse' });
 
 const gameSessionSchema = new mongoose.Schema({
+  gameId: { type: String, index: true, sparse: true },
   roomId: { type: mongoose.Schema.Types.ObjectId, ref: 'GameRoom', index: true },
   roomCode: { type: String, required: true, index: true },
   gameType: String,
@@ -34,13 +37,15 @@ const gameSessionSchema = new mongoose.Schema({
 });
 
 const gameResultSchema = new mongoose.Schema({
-  roomCode: { type: String, required: true, unique: true, index: true },
+  gameId: { type: String },
+  roomCode: { type: String, required: true },
   sessionId: { type: String, index: true },
   players: [{ sessionId: String, nickname: String }],
   roundResults: mongoose.Schema.Types.Mixed,
   finalScores: mongoose.Schema.Types.Mixed,
   completedAt: Date
 });
+gameResultSchema.index({ gameId: 1 }, { unique: true, sparse: true, name: 'gameId_unique_sparse' });
 
 const privacyDeletionSchema = new mongoose.Schema({
   sessionHash: { type: String, required: true, unique: true, index: true },

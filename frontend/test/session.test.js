@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearStoredSession, getStoredSession, saveStoredSession } from '../src/session.js';
+import {
+  clearRoomCreationRequestId,
+  clearStoredSession,
+  getRoomCreationRequestId,
+  getStoredSession,
+  saveStoredSession
+} from '../src/session.js';
 
 test('browser storage saves and restores only room recovery credentials', () => {
   const values = new Map();
@@ -24,6 +30,20 @@ test('session storage rejects incomplete sessions', () => {
   const storage = { setItem() { written = true; } };
   assert.equal(saveStoredSession({ nickname: 'Alex' }, storage), false);
   assert.equal(written, false);
+});
+
+test('room creation retries reuse the same idempotency key until credentials are saved', () => {
+  const values = new Map();
+  const storage = {
+    getItem(key) { return values.get(key) || null; },
+    setItem(key, value) { values.set(key, value); },
+    removeItem(key) { values.delete(key); }
+  };
+  const requestId = getRoomCreationRequestId(storage);
+  assert.match(requestId, /^[0-9a-f-]{36}$/i);
+  assert.equal(getRoomCreationRequestId(storage), requestId);
+  assert.equal(clearRoomCreationRequestId(storage), true);
+  assert.notEqual(getRoomCreationRequestId(storage), requestId);
 });
 
 test('legacy tab storage is migrated to durable browser storage', () => {

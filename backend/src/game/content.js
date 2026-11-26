@@ -14,8 +14,24 @@ const MODES = [
 ];
 
 const EXPERIENCES = [
-  { id: 'classic', label: 'The Other Side of Us' },
-  { id: 'kenyan', label: 'Kenyan Comedy Experience' }
+  {
+    id: 'classic',
+    label: 'The Other Side of Us',
+    description: 'A five-round story about how you see each other and the choices you make together.',
+    category: 'Connection story',
+    modes: ['classic'],
+    languages: ['english'],
+    available: true
+  },
+  {
+    id: 'kenyan',
+    label: 'Kenyan Comedy Experience',
+    description: 'Five rounds of Kenyan-inspired predictions, stories, quizzes, and playful challenges.',
+    category: 'Comedy, romance, and playful challenges',
+    modes: ['comedy', 'romance', 'savage', 'mind-reader'],
+    languages: ['english', 'swahili', 'sheng', 'mixed'],
+    available: true
+  }
 ];
 
 const PACKS = [

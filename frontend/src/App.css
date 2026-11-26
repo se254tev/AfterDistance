@@ -112,6 +112,35 @@ button,input,textarea,select{font:inherit}
 .app-shell,.room-layout,.room-layout>aside,.game-panel,.entry-card,.privacy-page,.centre-page,.results,.game-setup{min-width:0}
 .game-card,.choices button,.privacy-actions article{min-width:0}
 .entry-card input,.game-setup select,.story-answer textarea{font-size:16px}
+.experience-selection{max-width:760px}
+.experience-selection>h2{margin-bottom:10px}
+.experience-intro,.experience-status,.switch-notice{color:#bcb3c5;font-size:13px;line-height:1.6}
+.experience-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:12px;margin:22px 0}
+.experience-card{min-width:0;padding:20px;border:1px solid rgba(210,190,220,.13);border-radius:6px;background:rgba(255,255,255,.025)}
+.experience-card.selected{border-color:#b58aa8;background:rgba(181,138,168,.08)}
+.experience-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.experience-card h3,.switch-request h3,.completed-rounds h3{margin:0;font-family:Georgia,serif;font-size:21px;font-weight:400}
+.experience-card>p,.experience-card dd{color:#bcb3c5;font-size:12px;line-height:1.6}
+.experience-card dl{display:grid;gap:8px;margin:16px 0}
+.experience-card dl>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px}
+.experience-card dt{color:#9f96af;font-size:11px}
+.experience-card dd{margin:0;overflow-wrap:anywhere}
+.experience-card .button{min-height:42px;padding:0 14px;font-size:12px}
+.availability{flex:0 0 auto;padding:5px 8px;border:1px solid rgba(210,190,220,.2);border-radius:20px;color:#aaa1b7;font-size:10px}
+.availability.available{border-color:rgba(158,211,189,.35);color:#afcbbd}
+.current-experience{display:block;margin-top:12px;color:#dcb0c0;font-size:11px}
+.experience-actions,.completed-actions,.switch-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+.experience-actions .button,.completed-actions .button{min-height:46px}
+.switch-request{margin:18px 0;padding:18px;border:1px solid rgba(210,190,220,.2);border-radius:6px;background:rgba(181,138,168,.07)}
+.switch-request p{color:#bcb3c5;font-size:13px;line-height:1.6}
+.completed-rounds{display:grid;gap:10px;margin:24px 0}
+.completed-rounds h3{margin-bottom:4px}
+.completed-rounds article{padding:14px;border:1px solid rgba(210,190,220,.12);border-radius:5px}
+.completed-rounds article>b{color:#dcb0c0;font-size:12px}
+.completed-rounds article p{margin:8px 0 0;color:#ddd6e5;font-size:12px;overflow-wrap:anywhere}
+.completed-rounds article small{display:block;margin-top:8px;color:#aaa1b7;line-height:1.5}
+.completed-actions{align-items:center}
+@media(max-width:600px){.experience-actions,.completed-actions,.switch-actions{flex-direction:column}.experience-actions .button,.completed-actions .button,.switch-actions .button{width:100%}.experience-card{padding:16px}.experience-card dl>div{grid-template-columns:78px minmax(0,1fr)}}
 .exit-dialog{max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain}
 .centre-content{overflow-wrap:anywhere}
 .question,.round-timer,.reveal-row small,.score small{overflow-wrap:anywhere}
