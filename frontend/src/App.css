@@ -145,3 +145,63 @@ button,input,textarea,select{font:inherit}
 .centre-content{overflow-wrap:anywhere}
 .question,.round-timer,.reveal-row small,.score small{overflow-wrap:anywhere}
 @media(max-width:600px){.dialog-backdrop{padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}.exit-dialog{width:100%;max-height:100%;padding:24px 20px}.reveal-row{grid-template-columns:minmax(0,1fr);gap:6px}}
+
+html,body,#root{width:100%;min-width:0}
+body{overflow-x:clip}
+.app-shell{min-width:0;overflow-x:clip}
+img,svg,video,canvas{max-width:100%}
+button,a{max-width:100%}
+.button{white-space:normal;overflow-wrap:anywhere;line-height:1.35;text-align:center}
+.site-header{padding-left:max(clamp(12px,4vw,28px),env(safe-area-inset-left));padding-right:max(clamp(12px,4vw,28px),env(safe-area-inset-right))}
+.hero,.entry-card,.room-layout,.privacy-page,.centre-page,.game-panel,.experience-selection,.experience-card,.results,.exit-dialog{min-width:0}
+.entry-card{margin-top:clamp(12px,4vh,48px);margin-bottom:24px}
+.entry-card h2,.privacy-page h1,.centre-header h1,.exit-dialog h2{overflow-wrap:anywhere}
+.game-panel>* ,.game-setup>* ,.experience-selection>* ,.results>*{min-width:0}
+.game-setup-row,.experience-actions,.completed-actions,.switch-actions,.dialog-actions{min-width:0}
+.game-setup select,.story-answer textarea{max-width:100%}
+.game-card,.choices button,.resume-card,.privacy-actions article,.experience-card,.completed-rounds article,.contact-categories a{overflow-wrap:anywhere}
+.experience-card-heading,.room-code,.resume-card,.privacy-actions article,.reveal-row{min-width:0}
+.site-footer{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+.dialog-backdrop{overflow-y:auto;overscroll-behavior:contain}
+.exit-dialog{max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere}
+
+@media(max-width:360px){
+  .site-header{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .brand{font-size:clamp(14px,5vw,19px);letter-spacing:.1em}
+  .hero{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .hero h1{font-size:clamp(34px,10vw,42px)}
+  .entry-card,.privacy-page,.centre-page{width:calc(100% - 24px);padding:22px 16px}
+  .room-layout{width:calc(100% - 16px);grid-template-columns:minmax(0,1fr)}
+  .room-layout aside{grid-template-columns:minmax(0,1fr);padding:16px}
+  .room-layout aside>.eyebrow,.room-layout aside>.room-code,.waiting-card{grid-column:1}
+  .game-panel{padding-inline:14px}
+  .experience-card-heading{flex-direction:column}
+  .experience-card dl>div{grid-template-columns:minmax(0,1fr);gap:3px}
+  .score div{width:auto;flex:1 1 120px}
+  .site-footer{width:calc(100% - 24px)}
+}
+
+@media(max-height:520px){
+  .site-header{height:calc(56px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top)}
+  .hero{min-height:auto;justify-content:flex-start;padding-top:max(clamp(16px,4vh,32px),env(safe-area-inset-top));padding-bottom:max(clamp(16px,4vh,32px),calc(12px + env(safe-area-inset-bottom)))}
+  .orb{width:clamp(72px,18vh,104px);height:clamp(72px,18vh,104px);margin-bottom:12px}
+  .hero .lead{margin:12px 0 18px}
+  .entry-card{margin-top:12px;padding:clamp(20px,5vh,32px);margin-bottom:20px}
+  .entry-card h2{margin-bottom:18px}
+  .room-layout{min-height:0;margin-top:8px;margin-bottom:16px}
+  .room-layout aside,.game-panel{padding-block:20px}
+  .waiting-state{min-height:160px}
+  .dialog-backdrop{place-items:start center}
+  .exit-dialog{max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px)}
+}
+
+@media(orientation:landscape) and (max-height:520px) and (min-width:601px){
+  .hero{padding-inline:clamp(20px,8vw,100px)}
+  .actions{flex-direction:row;flex-wrap:wrap;justify-content:center}
+  .actions .button{width:auto}
+  .room-layout{grid-template-columns:minmax(210px,28%) minmax(0,1fr)}
+  .room-layout aside{border-right:1px solid rgba(210,190,220,.09);border-bottom:0}
+  .room-layout aside{grid-template-columns:minmax(0,1fr)}
+  .room-layout aside>.eyebrow,.room-layout aside>.room-code,.waiting-card{grid-column:1}
+  .game-panel{padding-inline:clamp(20px,4vw,48px)}
+}
